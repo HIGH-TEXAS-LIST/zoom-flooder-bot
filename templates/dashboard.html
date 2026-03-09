@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoom Bot Control Center</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<!-- ── Toast container ───────────────────────────────────────────── -->
+<div id="toast-container"></div>
+
+<header>
+    <div class="header-left">
+        <h1>Zoom Bot Control Center</h1>
+        <span id="session-timer" class="timer hidden">00:00</span>
+    </div>
+    <div id="connection-indicator" class="disconnected">Connecting…</div>
+</header>
+
+<!-- ── Progress bar ──────────────────────────────────────────────── -->
+<div id="progress-wrap" class="hidden">
+    <div id="progress-bar"></div>
+    <span id="progress-text">0%</span>
+</div>
+
+<main>
+
+    <!-- ── Config + Controls ─────────────────────────────────────────── -->
+    <section id="config-panel" class="panel">
+        <h2>Configuration</h2>
+        <form id="config-form" autocomplete="off">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="meeting-id">Meeting ID</label>
+                    <input type="text" id="meeting-id" placeholder="123 456 7890" required>
+                </div>
+                <div class="form-group">
+                    <label for="passcode">Passcode</label>
+                    <input type="text" id="passcode" placeholder="••••••" required>
+                </div>
+                <div class="form-group">
+                    <label for="thread-count">Threads</label>
+                    <input type="number" id="thread-count" min="1" value="1">
+                </div>
+                <div class="form-group">
+                    <label for="num-bots">Bots</label>
+                    <input type="number" id="num-bots" min="1" value="1" required>
+                </div>
+                <div class="form-group full-width">
+                    <label for="custom-name">Custom Name <span class="hint">(blank = random)</span></label>
+                    <input type="text" id="custom-name" placeholder="Leave blank for random names">
+                </div>
+            </div>
+        </form>
+        <div id="controls">
+            <button id="btn-start" class="btn btn-start">▶  Start</button>
+            <button id="btn-stop" class="btn btn-stop" disabled>■  Stop</button>
+        </div>
+    </section>
+
+    <!-- ── Live Stats ────────────────────────────────────────────────── -->
+    <section id="stats-panel" class="panel">
+        <h2>Live Stats</h2>
+        <div class="stat-grid">
+            <div class="stat-card stat-green">
+                <span class="stat-value" id="stat-joined">0</span>
+                <span class="stat-label">Joined</span>
+            </div>
+            <div class="stat-card stat-red">
+                <span class="stat-value" id="stat-failed">0</span>
+                <span class="stat-label">Failed</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-value" id="stat-total">0</span>
+                <span class="stat-label">Total</span>
+            </div>
+            <div class="stat-card stat-blue">
+                <span class="stat-value" id="stat-avg">—</span>
+                <span class="stat-label">Avg Time</span>
+            </div>
+            <div class="stat-card stat-blue">
+                <span class="stat-value" id="stat-fastest">—</span>
+                <span class="stat-label">Fastest</span>
+            </div>
+            <div class="stat-card stat-blue">
+                <span class="stat-value" id="stat-slowest">—</span>
+                <span class="stat-label">Slowest</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── Bot Status Grid ───────────────────────────────────────────── -->
+    <section id="bots-panel" class="panel">
+        <h2>Bot Status</h2>
+        <div id="bot-grid"></div>
+        <p id="bot-placeholder" class="placeholder-text">Bots will appear here once launched.</p>
+    </section>
+
+    <!-- ── Log Feed ──────────────────────────────────────────────────── -->
+    <section id="log-panel" class="panel">
+        <div class="log-header">
+            <h2>Log Feed</h2>
+            <div class="log-toolbar">
+                <button id="btn-clear-logs" class="btn-small" title="Clear logs">Clear</button>
+                <button id="btn-download-logs" class="btn-small" title="Download logs">Download</button>
+            </div>
+        </div>
+        <div id="log-container"></div>
+    </section>
+
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -31,7 +31,7 @@ _NAME_SELECTORS = [
     (By.ID, "inputname"),
     (By.CSS_SELECTOR, "input[name='name']"),
     (By.CSS_SELECTOR, "input[placeholder*='name' i]"),
-    (By.CSS_SELECTOR, "input[type='text']"),
+    (By.CSS_SELECTOR, "input[aria-label*='name' i]"),
 ]
 _PWD_SELECTORS = [
     (By.ID, "input-for-pwd"),
@@ -39,6 +39,7 @@ _PWD_SELECTORS = [
     (By.CSS_SELECTOR, "input[name='password']"),
     (By.CSS_SELECTOR, "input[placeholder*='passcode' i]"),
     (By.CSS_SELECTOR, "input[placeholder*='password' i]"),
+    (By.CSS_SELECTOR, "input[aria-label*='passcode' i]"),
     (By.CSS_SELECTOR, "input[type='password']"),
 ]
 _JOIN_SELECTORS = [
@@ -101,16 +102,24 @@ def _find_element_multi(driver, selectors):
     return None
 
 
+def _has_join_form(driver):
+    """Return True if BOTH name and password fields are present."""
+    return (
+        _find_element_multi(driver, _NAME_SELECTORS) is not None
+        and _find_element_multi(driver, _PWD_SELECTORS) is not None
+    )
+
+
 def _switch_to_zoom_content(driver, bot_id):
     """Try to switch into an iframe that contains the join form.
 
     Zoom's web client sometimes nests the form inside one or more iframes.
     Tries the main document first, then each iframe recursively (one level).
-    Returns True if form inputs were found in the current context.
+    Returns True if BOTH name and password inputs were found.
     """
     # Check main document first
-    if _find_element_multi(driver, _NAME_SELECTORS):
-        log.debug("Bot %d: Form found in main document.", bot_id + 1)
+    if _has_join_form(driver):
+        log.info("Bot %d: Form found in main document.", bot_id + 1)
         return True
 
     # Try each iframe
@@ -120,7 +129,7 @@ def _switch_to_zoom_content(driver, bot_id):
     for idx, iframe in enumerate(iframes):
         try:
             driver.switch_to.frame(iframe)
-            if _find_element_multi(driver, _NAME_SELECTORS):
+            if _has_join_form(driver):
                 log.info("Bot %d: Form found in iframe #%d.", bot_id + 1, idx)
                 return True
             # Check nested iframes (one level deep)
@@ -128,7 +137,7 @@ def _switch_to_zoom_content(driver, bot_id):
             for nidx, nested_frame in enumerate(nested):
                 try:
                     driver.switch_to.frame(nested_frame)
-                    if _find_element_multi(driver, _NAME_SELECTORS):
+                    if _has_join_form(driver):
                         log.info(
                             "Bot %d: Form found in nested iframe #%d.%d.",
                             bot_id + 1, idx, nidx,
@@ -330,10 +339,16 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name=""):
             _dismiss_gates(driver, bot_id)
 
             # Wait for the web client to load after dismissing gates
-            time.sleep(3)
+            # Poll for form with increasing waits (SPA may need time to render)
+            form_found = False
+            for wait_step in range(6):
+                time.sleep(2)
+                driver.switch_to.default_content()
+                if _switch_to_zoom_content(driver, bot_id):
+                    form_found = True
+                    break
 
-            # Switch into the correct frame (main doc or iframe)
-            if not _switch_to_zoom_content(driver, bot_id):
+            if not form_found:
                 # Dump diagnostics on first failure only
                 if attempt == 0:
                     _debug_dump(driver, bot_id)
@@ -349,7 +364,7 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name=""):
             pwd_el = _find_element_multi(driver, _PWD_SELECTORS)
 
             if not name_el or not pwd_el:
-                log.info("Bot %d: Fields disappeared after frame switch.", bot_id + 1)
+                log.warning("Bot %d: Form elements missing after locate.", bot_id + 1)
                 driver.quit()
                 driver = None
                 time.sleep(2)

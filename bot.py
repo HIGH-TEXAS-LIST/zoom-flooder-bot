@@ -103,11 +103,8 @@ def _find_element_multi(driver, selectors):
 
 
 def _has_join_form(driver):
-    """Return True if BOTH name and password fields are present."""
-    return (
-        _find_element_multi(driver, _NAME_SELECTORS) is not None
-        and _find_element_multi(driver, _PWD_SELECTORS) is not None
-    )
+    """Return True if name field is present (password may appear on step 2)."""
+    return _find_element_multi(driver, _NAME_SELECTORS) is not None
 
 
 def _switch_to_zoom_content(driver, bot_id):
@@ -359,37 +356,54 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name=""):
                 time.sleep(3)
                 continue
 
-            # Now we're in the right frame context — find fields
+            # ── Step 1: Fill name ────────────────────────────────────
             name_el = _find_element_multi(driver, _NAME_SELECTORS)
-            pwd_el = _find_element_multi(driver, _PWD_SELECTORS)
-
-            if not name_el or not pwd_el:
-                log.warning("Bot %d: Form elements missing after locate.", bot_id + 1)
+            if not name_el:
+                log.warning("Bot %d: Name field missing.", bot_id + 1)
                 driver.quit()
                 driver = None
                 time.sleep(2)
                 continue
 
-            # Fill name
             name_el.clear()
             name_el.send_keys(bot_name)
             time.sleep(INPUT_SETTLE_DELAY)
+            log.info("Bot %d: Filled name '%s'.", bot_id + 1, bot_name)
 
-            # Fill passcode
-            pwd_el.clear()
-            pwd_el.send_keys(passcode)
-            time.sleep(INPUT_SETTLE_DELAY)
+            # Check if passcode field is on the same page (old-style single-step)
+            pwd_el = _find_element_multi(driver, _PWD_SELECTORS)
+            if pwd_el:
+                pwd_el.clear()
+                pwd_el.send_keys(passcode)
+                time.sleep(INPUT_SETTLE_DELAY)
+                log.info("Bot %d: Filled passcode (single-step).", bot_id + 1)
 
-            # Verify before joining
-            if not _verify_input_fields(driver, bot_name, passcode):
-                log.info("Bot %d: Verification failed, retrying…", bot_id + 1)
-                driver.quit()
-                driver = None
-                time.sleep(1)
-                continue
-
-            # Click join
+            # Click Join
             _click_join(driver, bot_id, bot_name, passcode)
+
+            # ── Step 2: Handle passcode on second page (if needed) ──
+            if not pwd_el:
+                time.sleep(3)
+                # Re-check frames after page transition
+                driver.switch_to.default_content()
+                _switch_to_zoom_content(driver, bot_id)
+
+                pwd_el = None
+                for _ in range(5):
+                    pwd_el = _find_element_multi(driver, _PWD_SELECTORS)
+                    if pwd_el:
+                        break
+                    time.sleep(2)
+
+                if pwd_el:
+                    pwd_el.clear()
+                    pwd_el.send_keys(passcode)
+                    time.sleep(INPUT_SETTLE_DELAY)
+                    log.info("Bot %d: Filled passcode (step 2).", bot_id + 1)
+                    # Click Join again for passcode submission
+                    _click_join(driver, bot_id, bot_name, passcode)
+                else:
+                    log.info("Bot %d: No passcode requested, continuing…", bot_id + 1)
 
             time.sleep(POST_JOIN_DELAY)
 

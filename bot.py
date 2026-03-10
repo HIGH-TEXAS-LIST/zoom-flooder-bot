@@ -311,7 +311,7 @@ def _dismiss_gates(driver, bot_id):
 
 
 # ── Main bot launcher ───────────────────────────────────────────────────────
-def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name=""):
+def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="", stop_event=None):
     """Launch a single bot that joins the given Zoom meeting.
 
     Returns (driver, elapsed_seconds) on success or (None, elapsed_seconds) on failure.
@@ -319,7 +319,15 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name=""):
     driver = None
     t_start = time.monotonic()
 
+    def _stopped():
+        return stop_event is not None and stop_event.is_set()
+
     for attempt in range(MAX_ATTEMPTS):
+        if _stopped():
+            log.info("Bot %d: Cancelled before attempt %d.", bot_id + 1, attempt + 1)
+            elapsed = time.monotonic() - t_start
+            return (None, elapsed)
+
         try:
             driver = create_driver()
             wait = WebDriverWait(driver, ELEMENT_WAIT_TIMEOUT)
@@ -329,6 +337,9 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name=""):
             bot_name = custom_name or _pick_unique_name()
 
             # Wait for page to fully load (Zoom SPA needs time)
+            if _stopped():
+                driver.quit(); driver = None
+                return (None, time.monotonic() - t_start)
             time.sleep(5)
 
             # ── Dismiss pre-join gates (cookies, disclaimer, etc.) ──────
@@ -339,6 +350,9 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name=""):
             # Poll for form with increasing waits (SPA may need time to render)
             form_found = False
             for wait_step in range(6):
+                if _stopped():
+                    driver.quit(); driver = None
+                    return (None, time.monotonic() - t_start)
                 time.sleep(2)
                 driver.switch_to.default_content()
                 if _switch_to_zoom_content(driver, bot_id):
@@ -443,6 +457,74 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name=""):
 
     elapsed = time.monotonic() - t_start
     return (None, elapsed)
+
+
+# ── Leave-meeting selectors ────────────────────────────────────────────────
+_LEAVE_BTN_SELECTORS = [
+    (By.XPATH, "//button[contains(@class, 'leave-meeting')]"),
+    (By.XPATH, "//button[contains(@class, 'footer__leave-btn')]"),
+    (By.CSS_SELECTOR, "button.footer__leave-btn"),
+    (By.CSS_SELECTOR, "button[aria-label*='leave' i]"),
+    (By.XPATH, "//button[contains(text(), 'Leave')]"),
+]
+_LEAVE_CONFIRM_SELECTORS = [
+    (By.XPATH, "//button[contains(@class, 'leave-meeting-options__btn')]"),
+    (By.XPATH, "//button[contains(text(), 'Leave Meeting')]"),
+    (By.XPATH, "//button[contains(text(), 'Leave meeting')]"),
+    (By.CSS_SELECTOR, "button.zm-btn--primary.leave-meeting-options__btn"),
+    (By.CSS_SELECTOR, ".leave-meeting-options__btn"),
+]
+
+LEAVE_TIMEOUT = 5
+
+
+def leave_meeting(driver, bot_id):
+    """Gracefully leave a Zoom meeting by clicking the Leave button.
+
+    Returns True if the leave action was performed, False otherwise.
+    The caller should still call driver.quit() after this.
+    """
+    try:
+        driver.switch_to.default_content()
+
+        # Switch into the Zoom iframe if needed
+        iframes = driver.find_elements(By.TAG_NAME, "iframe")
+        for iframe in iframes:
+            try:
+                driver.switch_to.frame(iframe)
+                if _find_element_multi(driver, _LEAVE_BTN_SELECTORS):
+                    break
+                driver.switch_to.default_content()
+            except Exception:
+                try:
+                    driver.switch_to.default_content()
+                except Exception:
+                    pass
+
+        # Step 1: Click the "Leave" button in the meeting toolbar
+        leave_btn = _find_element_multi(driver, _LEAVE_BTN_SELECTORS)
+        if not leave_btn:
+            log.debug("Bot %d: Leave button not found, skipping graceful leave.", bot_id)
+            return False
+
+        driver.execute_script("arguments[0].click();", leave_btn)
+        log.info("Bot %d: Clicked leave button.", bot_id)
+        time.sleep(1)
+
+        # Step 2: Click "Leave Meeting" on the confirmation dialog
+        confirm_btn = _find_element_multi(driver, _LEAVE_CONFIRM_SELECTORS)
+        if confirm_btn:
+            driver.execute_script("arguments[0].click();", confirm_btn)
+            log.info("Bot %d: Confirmed leave meeting.", bot_id)
+            time.sleep(1)
+        else:
+            log.debug("Bot %d: No leave confirmation dialog, leave may have completed directly.", bot_id)
+
+        return True
+
+    except Exception as exc:
+        log.debug("Bot %d: Error during graceful leave: %s", bot_id, exc)
+        return False
 
 
 def _click_join(driver, bot_id, bot_name, passcode):

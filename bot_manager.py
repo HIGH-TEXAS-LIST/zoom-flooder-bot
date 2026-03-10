@@ -14,7 +14,7 @@ import random
 import threading
 import time
 
-from bot import launch_bot, init_name_pool
+from bot import launch_bot, init_name_pool, leave_meeting
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +23,8 @@ class BotStatus(enum.Enum):
     PENDING = "pending"
     JOINING = "joining"
     JOINED = "joined"
+    LEAVING = "leaving"
+    LEFT = "left"
     FAILED = "failed"
 
 
@@ -34,6 +36,7 @@ class BotManager:
         self._active_drivers = []
         self._running = False
         self._stop_event = threading.Event()
+        self._run_thread = None
 
         # Live stats — guarded by _stats_lock
         self._stats_lock = threading.Lock()
@@ -92,8 +95,8 @@ class BotManager:
 
         self._notify_stats()
 
-        t = threading.Thread(target=self._run, args=(cfg,), daemon=True)
-        t.start()
+        self._run_thread = threading.Thread(target=self._run, args=(cfg,), daemon=True)
+        self._run_thread.start()
 
     # ── Background launch loop ───────────────────────────────────────────────
     def _run(self, cfg):
@@ -129,6 +132,7 @@ class BotManager:
                             passcode=cfg["passcode"],
                             names_list=cfg["names_list"],
                             custom_name=cfg["custom_name"],
+                            stop_event=self._stop_event,
                         )] = i
 
                     for future in concurrent.futures.as_completed(futures):
@@ -160,15 +164,18 @@ class BotManager:
 
             self._log_summary()
         finally:
+            # If stopped, leave & quit all drivers now that no futures are pending
+            if self._stop_event.is_set():
+                self._shutdown_drivers()
             self._running = False
             self._lock.release()
             self._notify_stats()
 
     # ── Stop / Shutdown ──────────────────────────────────────────────────────
     def stop(self):
-        """Signal the launch loop to stop, then shut down all drivers."""
+        """Signal the launch loop to stop.  Shutdown happens inside _run."""
         self._stop_event.set()
-        threading.Thread(target=self._shutdown_drivers, daemon=True).start()
+        log.info("Stop signal sent — waiting for active bots to finish…")
 
     def _shutdown_drivers(self):
         drivers = list(self._active_drivers)
@@ -176,19 +183,26 @@ class BotManager:
             return
         drivers.sort(key=lambda x: x[0])
 
-        def _quit(item):
+        def _leave_and_quit(item):
             bot_id, driver = item
             try:
-                log.info("Exiting Bot %d…", bot_id)
-                driver.quit()
+                self._set_status(bot_id - 1, BotStatus.LEAVING)
+                log.info("Bot %d: Leaving meeting…", bot_id)
+                leave_meeting(driver, bot_id)
+                self._set_status(bot_id - 1, BotStatus.LEFT)
             except Exception:
-                pass
+                log.debug("Bot %d: Graceful leave failed, force-quitting.", bot_id)
+            finally:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(drivers), 1)) as pool:
-            list(pool.map(_quit, drivers))
+            list(pool.map(_leave_and_quit, drivers))
 
         self._active_drivers.clear()
-        log.info("All %d bots exited.", len(drivers))
+        log.info("All %d bots left and exited.", len(drivers))
 
     # ── Internals ────────────────────────────────────────────────────────────
     def _set_status(self, bot_id, status):

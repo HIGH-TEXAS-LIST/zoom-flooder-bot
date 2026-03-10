@@ -267,6 +267,8 @@ input:disabled {
 .bot-card.joining  { border-color: var(--accent-yellow); color: var(--accent-yellow); background: var(--accent-yellow-dim); }
 .bot-card.joined   { border-color: var(--accent-green); color: var(--accent-green); background: var(--accent-green-dim); }
 .bot-card.failed   { border-color: var(--accent-red); color: var(--accent-red); background: var(--accent-red-dim); }
+.bot-card.leaving  { border-color: var(--accent-yellow); color: var(--accent-yellow); background: var(--accent-yellow-dim); }
+.bot-card.left     { border-color: var(--text-muted); color: var(--text-secondary); background: rgba(107, 113, 144, 0.08); }
 
 /* ── Log Feed ──────────────────────────────────────────────────────── */
 .log-header {

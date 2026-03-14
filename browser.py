@@ -20,8 +20,7 @@ log = logging.getLogger(__name__)
 
 PAGE_LOAD_TIMEOUT = 30
 
-# ── Cached singletons (resolved once, reused for every bot) ─────────────────
-_options_cache = None
+# ── Cached driver path (resolved once, reused for every bot) ─────────────────
 _driver_path_cache = None
 _cache_lock = threading.Lock()
 
@@ -52,12 +51,8 @@ def _resolve_driver_path():
         return _driver_path_cache
 
 
-def get_chrome_options():
-    """Return a cached Chrome Options instance (built once, reused)."""
-    global _options_cache
-    if _options_cache is not None:
-        return _options_cache
-
+def _build_chrome_options(proxy=None):
+    """Build a fresh Chrome Options instance with optional proxy."""
     options = Options()
 
     # Logging suppression
@@ -71,6 +66,7 @@ def get_chrome_options():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--no-sandbox")
     options.add_argument("--headless=new")  # modern headless (faster + more stable)
+    options.add_argument("--incognito")
 
     # GPU / rendering — save memory
     options.add_argument("--disable-gpu")
@@ -84,6 +80,14 @@ def get_chrome_options():
     options.add_argument("--mute-audio")
     options.add_argument("--disable-features=WebRtcHideLocalIpsWithMdns")
 
+    # Proxy
+    if proxy:
+        if proxy.startswith("socks"):
+            options.add_argument(f"--proxy-server={proxy}")
+        else:
+            options.add_argument(f"--proxy-server={proxy}")
+        log.debug("Using proxy: %s", proxy.split("@")[-1] if "@" in proxy else proxy)
+
     # Permissions
     options.add_experimental_option(
         "prefs",
@@ -94,13 +98,12 @@ def get_chrome_options():
         },
     )
 
-    _options_cache = options
-    return _options_cache
+    return options
 
 
-def create_driver():
+def create_driver(proxy=None):
     """Create and return a configured Chrome WebDriver instance."""
-    options = get_chrome_options()
+    options = _build_chrome_options(proxy=proxy)
     service = Service(_resolve_driver_path())
 
     if os.name == "nt":

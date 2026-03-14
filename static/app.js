@@ -23,6 +23,7 @@ document.addEventListener("DOMContentLoaded", () => {
         customName:   document.getElementById("custom-name"),
         autoRestart:  document.getElementById("auto-restart"),
         restartDelay: document.getElementById("restart-delay"),
+        useProxies:   document.getElementById("use-proxies"),
     };
 
     const statEls = {
@@ -79,7 +80,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function setFormLocked(locked) {
         Object.entries(inputs).forEach(([key, el]) => {
             // Keep auto-restart controls always interactive
-            if (key === "autoRestart" || key === "restartDelay") return;
+            if (key === "autoRestart" || key === "restartDelay" || key === "useProxies") return;
             el.disabled = locked;
         });
     }
@@ -133,6 +134,7 @@ document.addEventListener("DOMContentLoaded", () => {
             thread_count: parseInt(inputs.threadCount.value) || 1,
             num_bots:     numBots,
             custom_name:  inputs.customName.value,
+            use_proxies:  inputs.useProxies.checked,
         };
 
         if (!payload.meeting_id || !payload.passcode) {

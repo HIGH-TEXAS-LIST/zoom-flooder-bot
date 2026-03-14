@@ -8,6 +8,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_FILE = "default.txt"
 NAMES_FILE = "names.txt"
+PROXIES_FILE = "proxies.txt"
 FALLBACK_NAMES = ["User", "Participant", "Student", "Guest", "Attendee"]
 
 # RAM estimate per Chrome instance in MB
@@ -40,6 +41,21 @@ def load_names(path=NAMES_FILE):
     except FileNotFoundError:
         log.warning("'%s' not found, using fallback names.", path)
         return list(FALLBACK_NAMES)
+
+
+def load_proxies(path=PROXIES_FILE):
+    """Load proxy list from file. Returns empty list if none found."""
+    try:
+        with open(path, "r") as f:
+            proxies = [
+                line.strip() for line in f
+                if line.strip() and not line.strip().startswith("#")
+            ]
+        if proxies:
+            log.info("Loaded %d proxies from '%s'.", len(proxies), path)
+        return proxies
+    except FileNotFoundError:
+        return []
 
 
 # ── CLI helpers (used by main.py) ────────────────────────────────────────────
@@ -109,12 +125,14 @@ def get_user_config():
         "num_bots": num_bots,
         "custom_name": custom_name,
         "names_list": names,
+        "proxies": load_proxies(),
     }
 
 
 # ── Programmatic helpers (used by web_app.py) ────────────────────────────────
 
-def build_config(meeting_id, passcode, thread_count, num_bots, custom_name=""):
+def build_config(meeting_id, passcode, thread_count, num_bots, custom_name="",
+                  use_proxies=False):
     """Build a config dict from explicit values — no input() calls."""
     names = load_names()
 
@@ -132,6 +150,10 @@ def build_config(meeting_id, passcode, thread_count, num_bots, custom_name=""):
             estimated_ram,
         )
 
+    proxies = load_proxies() if use_proxies else []
+    if use_proxies and not proxies:
+        log.warning("Proxy rotation enabled but proxies.txt is empty or missing.")
+
     return {
         "thread_count": thread_count,
         "meeting_id": str(meeting_id).strip(),
@@ -139,6 +161,7 @@ def build_config(meeting_id, passcode, thread_count, num_bots, custom_name=""):
         "num_bots": num_bots,
         "custom_name": str(custom_name).strip(),
         "names_list": names,
+        "proxies": proxies,
     }
 
 

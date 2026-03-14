@@ -117,6 +117,7 @@ def handle_start(data):
             thread_count=data.get("thread_count", 1),
             num_bots=data.get("num_bots", 1),
             custom_name=data.get("custom_name", ""),
+            use_proxies=data.get("use_proxies", False),
         )
         manager.start(cfg)
         emit("status", {"ok": True, "message": "Launch started."})

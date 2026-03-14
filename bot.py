@@ -311,7 +311,8 @@ def _dismiss_gates(driver, bot_id):
 
 
 # ── Main bot launcher ───────────────────────────────────────────────────────
-def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="", stop_event=None):
+def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="",
+               stop_event=None, proxies=None):
     """Launch a single bot that joins the given Zoom meeting.
 
     Returns (driver, elapsed_seconds) on success or (None, elapsed_seconds) on failure.
@@ -329,7 +330,12 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="", stop_ev
             return (None, elapsed)
 
         try:
-            driver = create_driver()
+            # Pick a random proxy for this attempt
+            proxy = random.choice(proxies) if proxies else None
+            if proxy:
+                log.info("Bot %d: Using proxy %s", bot_id + 1,
+                         proxy.split("@")[-1] if "@" in proxy else proxy)
+            driver = create_driver(proxy=proxy)
             wait = WebDriverWait(driver, ELEMENT_WAIT_TIMEOUT)
 
             driver.get(JOIN_URL.format(meeting_id=meeting_id))

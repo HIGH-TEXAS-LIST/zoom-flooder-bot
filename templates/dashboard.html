@@ -53,6 +53,16 @@
                     <label for="custom-name">Custom Name <span class="hint">(blank = random)</span></label>
                     <input type="text" id="custom-name" placeholder="Leave blank for random names">
                 </div>
+                <div class="form-group auto-restart-row">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="auto-restart">
+                        <span class="toggle-text">Auto Restart</span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label for="restart-delay">Restart Delay <span class="hint">(seconds)</span></label>
+                    <input type="number" id="restart-delay" min="1" value="5">
+                </div>
             </div>
         </form>
         <div id="controls">

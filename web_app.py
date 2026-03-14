@@ -132,6 +132,14 @@ def handle_stop():
     emit("status", {"ok": True, "message": "Stop signal sent."})
 
 
+@socketio.on("set_auto_restart")
+def handle_auto_restart(data):
+    enabled = bool(data.get("enabled", False))
+    delay = int(data.get("delay", 5))
+    manager.set_auto_restart(enabled, delay)
+    emit("status", {"ok": True, "message": f"Auto-restart {'enabled' if enabled else 'disabled'}."})
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     log.info("Starting web dashboard on http://localhost:5000")

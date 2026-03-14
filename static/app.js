@@ -16,11 +16,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnDownloadLogs = document.getElementById("btn-download-logs");
 
     const inputs = {
-        meetingId:   document.getElementById("meeting-id"),
-        passcode:    document.getElementById("passcode"),
-        threadCount: document.getElementById("thread-count"),
-        numBots:     document.getElementById("num-bots"),
-        customName:  document.getElementById("custom-name"),
+        meetingId:    document.getElementById("meeting-id"),
+        passcode:     document.getElementById("passcode"),
+        threadCount:  document.getElementById("thread-count"),
+        numBots:      document.getElementById("num-bots"),
+        customName:   document.getElementById("custom-name"),
+        autoRestart:  document.getElementById("auto-restart"),
+        restartDelay: document.getElementById("restart-delay"),
     };
 
     const statEls = {
@@ -35,6 +37,23 @@ document.addEventListener("DOMContentLoaded", () => {
     // ── State ────────────────────────────────────────────────────────
     let timerInterval = null;
     let timerStart    = null;
+    let cycleCount    = 0;
+
+    // ── Auto-restart toggle ───────────────────────────────────────────
+    inputs.autoRestart.addEventListener("change", () => {
+        socket.emit("set_auto_restart", {
+            enabled: inputs.autoRestart.checked,
+            delay: parseInt(inputs.restartDelay.value) || 5,
+        });
+    });
+    inputs.restartDelay.addEventListener("change", () => {
+        if (inputs.autoRestart.checked) {
+            socket.emit("set_auto_restart", {
+                enabled: true,
+                delay: parseInt(inputs.restartDelay.value) || 5,
+            });
+        }
+    });
 
     // ── Pre-populate form ────────────────────────────────────────────
     fetch("/api/defaults")
@@ -58,7 +77,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ── Form lock ────────────────────────────────────────────────────
     function setFormLocked(locked) {
-        Object.values(inputs).forEach(el => el.disabled = locked);
+        Object.entries(inputs).forEach(([key, el]) => {
+            // Keep auto-restart controls always interactive
+            if (key === "autoRestart" || key === "restartDelay") return;
+            el.disabled = locked;
+        });
     }
 
     // ── Timer ────────────────────────────────────────────────────────
@@ -117,6 +140,12 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
+        // Sync auto-restart setting before launching
+        socket.emit("set_auto_restart", {
+            enabled: inputs.autoRestart.checked,
+            delay: parseInt(inputs.restartDelay.value) || 5,
+        });
+
         socket.emit("start", payload);
         btnStart.disabled = true;
         btnStop.disabled  = false;
@@ -174,12 +203,29 @@ document.addEventListener("DOMContentLoaded", () => {
         // Update progress bar
         updateProgress(s.succeeded, s.failed, s.total);
 
+        // Detect new restart cycle: stats reset while still running
+        if (s.running && s.cycle > cycleCount) {
+            cycleCount = s.cycle;
+            showToast("Auto-restart: cycle " + cycleCount + " started.", "info");
+            // Rebuild bot cards for new cycle
+            const numBots = s.total;
+            botGrid.innerHTML = "";
+            for (let i = 0; i < numBots; i++) {
+                const card = document.createElement("div");
+                card.className = "bot-card pending";
+                card.id = "bot-" + i;
+                card.textContent = "Bot " + (i + 1);
+                botGrid.appendChild(card);
+            }
+        }
+
         // Session ended
         if (!s.running && btnStart.disabled) {
             btnStart.disabled = false;
             btnStop.disabled  = true;
             setFormLocked(false);
             stopTimer();
+            cycleCount = 0;
 
             if (s.total > 0 && (s.succeeded + s.failed) >= s.total) {
                 if (s.failed === 0) {

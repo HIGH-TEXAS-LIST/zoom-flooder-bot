@@ -37,6 +37,8 @@ class BotManager:
         self._running = False
         self._stop_event = threading.Event()
         self._run_thread = None
+        self._auto_restart = False
+        self._restart_delay = 5        # seconds between restart cycles
 
         # Live stats — guarded by _stats_lock
         self._stats_lock = threading.Lock()
@@ -45,6 +47,7 @@ class BotManager:
         self._succeeded = 0
         self._failed = 0
         self._total = 0
+        self._cycle = 0                # restart cycle counter
 
         # Callback hooks (set by the consumer: CLI or web layer)
         self.on_bot_update = None      # fn(bot_id, status, elapsed)
@@ -66,11 +69,20 @@ class BotManager:
                 "slowest": max(jt) if jt else 0,
                 "bot_statuses": dict(self._bot_statuses),
                 "running": self._running,
+                "auto_restart": self._auto_restart,
+                "cycle": self._cycle,
             }
 
     @property
     def is_running(self):
         return self._running
+
+    # ── Auto-restart control ────────────────────────────────────────────────
+    def set_auto_restart(self, enabled, delay=5):
+        """Enable or disable auto-restart between cycles."""
+        self._auto_restart = bool(enabled)
+        self._restart_delay = max(1, int(delay))
+        log.info("Auto-restart %s (delay: %ds)", "enabled" if self._auto_restart else "disabled", self._restart_delay)
 
     # ── Start ────────────────────────────────────────────────────────────────
     def start(self, cfg):
@@ -84,6 +96,7 @@ class BotManager:
         self._stop_event.clear()
         self._running = True
         self._active_drivers.clear()
+        self._cycle = 0
 
         # Reset stats
         with self._stats_lock:
@@ -101,75 +114,104 @@ class BotManager:
     # ── Background launch loop ───────────────────────────────────────────────
     def _run(self, cfg):
         try:
-            num_bots = cfg["num_bots"]
-            batch_size = min(cfg["thread_count"], num_bots)
-            total_batches = (num_bots + batch_size - 1) // batch_size
+            while True:
+                self._cycle += 1
+                self._run_single_cycle(cfg)
 
-            init_name_pool(cfg["names_list"])
-            log.info("Launching %d bots in %d batch(es)…", num_bots, total_batches)
+                # Check if we should auto-restart
+                if self._stop_event.is_set() or not self._auto_restart:
+                    break
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as pool:
-                for batch_idx in range(total_batches):
-                    if self._stop_event.is_set():
-                        log.info("Launch cancelled by user.")
-                        break
+                # Shut down current drivers before restarting
+                log.info("── Auto-restart: shutting down cycle %d drivers…", self._cycle)
+                self._shutdown_drivers()
 
-                    start = batch_idx * batch_size
-                    end = min(start + batch_size, num_bots)
+                # Wait before restarting (interruptible)
+                log.info("── Auto-restart: waiting %ds before cycle %d…", self._restart_delay, self._cycle + 1)
+                self._stop_event.wait(timeout=self._restart_delay)
+                if self._stop_event.is_set():
+                    break
 
-                    log.info(
-                        "Batch %d/%d (Bots %d–%d)…",
-                        batch_idx + 1, total_batches, start + 1, end,
-                    )
-
-                    futures = {}
-                    for i in range(start, end):
-                        self._set_status(i, BotStatus.JOINING)
-                        futures[pool.submit(
-                            launch_bot,
-                            bot_id=i,
-                            meeting_id=cfg["meeting_id"],
-                            passcode=cfg["passcode"],
-                            names_list=cfg["names_list"],
-                            custom_name=cfg["custom_name"],
-                            stop_event=self._stop_event,
-                        )] = i
-
-                    for future in concurrent.futures.as_completed(futures):
-                        bot_id = futures[future]
-                        try:
-                            driver, elapsed = future.result()
-                        except Exception as exc:
-                            log.error("Bot %d: Unexpected error: %s", bot_id + 1, exc)
-                            driver, elapsed = None, 0.0
-
-                        with self._stats_lock:
-                            self._join_times.append(elapsed)
-                            if driver:
-                                self._active_drivers.append((bot_id + 1, driver))
-                                self._succeeded += 1
-                                self._bot_statuses[bot_id] = BotStatus.JOINED
-                            else:
-                                self._failed += 1
-                                self._bot_statuses[bot_id] = BotStatus.FAILED
-
-                        self._notify_bot(bot_id, elapsed)
-                        self._notify_stats()
-
-                    # Inter-batch delay (interruptible)
-                    if batch_idx < total_batches - 1 and not self._stop_event.is_set():
-                        delay = random.uniform(1, 2)
-                        log.info("Batch done. Waiting %.1fs…", delay)
-                        self._stop_event.wait(timeout=delay)
-
-            self._log_summary()
+                # Reset stats for new cycle
+                num_bots = cfg["num_bots"]
+                with self._stats_lock:
+                    self._bot_statuses = {i: BotStatus.PENDING for i in range(num_bots)}
+                    self._join_times = []
+                    self._succeeded = 0
+                    self._failed = 0
+                    self._total = num_bots
+                self._notify_stats()
         finally:
-            # If stopped, leave & quit all drivers now that no futures are pending
             if self._stop_event.is_set():
                 self._shutdown_drivers()
             self._running = False
             self._lock.release()
             self._notify_stats()
+
+    def _run_single_cycle(self, cfg):
+        """Execute one full launch-all-bots cycle."""
+        num_bots = cfg["num_bots"]
+        batch_size = min(cfg["thread_count"], num_bots)
+        total_batches = (num_bots + batch_size - 1) // batch_size
+
+        init_name_pool(cfg["names_list"])
+        log.info("Cycle %d: Launching %d bots in %d batch(es)…", self._cycle, num_bots, total_batches)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as pool:
+            for batch_idx in range(total_batches):
+                if self._stop_event.is_set():
+                    log.info("Launch cancelled by user.")
+                    break
+
+                start = batch_idx * batch_size
+                end = min(start + batch_size, num_bots)
+
+                log.info(
+                    "Batch %d/%d (Bots %d–%d)…",
+                    batch_idx + 1, total_batches, start + 1, end,
+                )
+
+                futures = {}
+                for i in range(start, end):
+                    self._set_status(i, BotStatus.JOINING)
+                    futures[pool.submit(
+                        launch_bot,
+                        bot_id=i,
+                        meeting_id=cfg["meeting_id"],
+                        passcode=cfg["passcode"],
+                        names_list=cfg["names_list"],
+                        custom_name=cfg["custom_name"],
+                        stop_event=self._stop_event,
+                    )] = i
+
+                for future in concurrent.futures.as_completed(futures):
+                    bot_id = futures[future]
+                    try:
+                        driver, elapsed = future.result()
+                    except Exception as exc:
+                        log.error("Bot %d: Unexpected error: %s", bot_id + 1, exc)
+                        driver, elapsed = None, 0.0
+
+                    with self._stats_lock:
+                        self._join_times.append(elapsed)
+                        if driver:
+                            self._active_drivers.append((bot_id + 1, driver))
+                            self._succeeded += 1
+                            self._bot_statuses[bot_id] = BotStatus.JOINED
+                        else:
+                            self._failed += 1
+                            self._bot_statuses[bot_id] = BotStatus.FAILED
+
+                    self._notify_bot(bot_id, elapsed)
+                    self._notify_stats()
+
+                # Inter-batch delay (interruptible)
+                if batch_idx < total_batches - 1 and not self._stop_event.is_set():
+                    delay = random.uniform(1, 2)
+                    log.info("Batch done. Waiting %.1fs…", delay)
+                    self._stop_event.wait(timeout=delay)
+
+        self._log_summary()
 
     # ── Stop / Shutdown ──────────────────────────────────────────────────────
     def stop(self):

@@ -7,6 +7,7 @@ import threading
 import time
 
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import (
@@ -312,7 +313,7 @@ def _dismiss_gates(driver, bot_id):
 
 # ── Main bot launcher ───────────────────────────────────────────────────────
 def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="",
-               stop_event=None, proxies=None, chat_message=""):
+               stop_event=None, proxies=None, chat_recipient="", chat_message=""):
     """Launch a single bot that joins the given Zoom meeting.
 
     Returns (driver, elapsed_seconds) on success or (None, elapsed_seconds) on failure.
@@ -441,7 +442,7 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="",
 
             # ── Send chat message if configured ─────────────────────
             if chat_message and driver:
-                send_chat_message(driver, bot_id, chat_message)
+                send_chat_message(driver, bot_id, chat_message, chat_recipient)
 
             return (driver, elapsed)
 
@@ -493,9 +494,96 @@ _CHAT_SEND_SELECTORS = [
     (By.XPATH, "//button[contains(@class, 'send')]"),
 ]
 
+# Selectors for the chat "To" recipient dropdown
+_CHAT_RECEIVER_SELECTORS = [
+    (By.CSS_SELECTOR, "button[aria-label*='send to' i]"),
+    (By.CSS_SELECTOR, "button[aria-label*='receiver' i]"),
+    (By.CSS_SELECTOR, "button[aria-label*='chat receiver' i]"),
+    (By.CSS_SELECTOR, ".chat-receiver-list__receiver"),
+    (By.CSS_SELECTOR, "[class*='chat-receiver']"),
+    (By.CSS_SELECTOR, "button[class*='receiver']"),
+    (By.XPATH, "//button[contains(@class, 'dropdown')]//span[contains(text(), 'Everyone')]"),
+    (By.XPATH, "//button[contains(text(), 'Everyone')]"),
+    (By.CSS_SELECTOR, "a[aria-haspopup='true'][class*='chat']"),
+    (By.CSS_SELECTOR, "div[class*='chat-to'] button"),
+]
 
-def send_chat_message(driver, bot_id, message):
+
+def _xpath_escape(value):
+    """Safely escape a string for use in XPath expressions.
+
+    Handles strings containing single quotes, double quotes, or both.
+    """
+    if "'" not in value:
+        return f"'{value}'"
+    if '"' not in value:
+        return f'"{value}"'
+    # Contains both quote types — use concat()
+    parts = value.split("'")
+    return "concat(" + ",\"'\",".join(f"'{p}'" for p in parts) + ")"
+
+
+def _css_escape(value):
+    """Escape a string for safe use in CSS attribute selectors."""
+    return value.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"').replace("]", "\\]")
+
+
+def _select_chat_recipient(driver, bot_id, recipient_name):
+    """Select a specific user from the chat recipient dropdown.
+
+    Returns True if the recipient was selected, False otherwise.
+    """
+    try:
+        # Click the receiver/To dropdown
+        receiver_btn = _find_element_multi(driver, _CHAT_RECEIVER_SELECTORS)
+        if not receiver_btn:
+            log.warning("Bot %d: Chat recipient dropdown not found.", bot_id + 1)
+            return False
+
+        driver.execute_script("arguments[0].click();", receiver_btn)
+        time.sleep(1)
+
+        # Look for the specific user in the dropdown list
+        safe_xpath = _xpath_escape(recipient_name)
+        safe_css = _css_escape(recipient_name)
+        user_selectors = [
+            (By.XPATH, f"//a[contains(text(), {safe_xpath})]"),
+            (By.XPATH, f"//span[contains(text(), {safe_xpath})]"),
+            (By.XPATH, f"//li[contains(text(), {safe_xpath})]"),
+            (By.XPATH, f"//div[contains(text(), {safe_xpath})]"),
+            (By.XPATH, f"//button[contains(text(), {safe_xpath})]"),
+            (By.CSS_SELECTOR, f"[title*='{safe_css}']"),
+            (By.XPATH, f"//a[@aria-label and contains(@aria-label, {safe_xpath})]"),
+        ]
+
+        user_option = None
+        for _ in range(3):
+            user_option = _find_element_multi(driver, user_selectors)
+            if user_option:
+                break
+            time.sleep(0.5)
+
+        if not user_option:
+            log.warning("Bot %d: Recipient '%s' not found in chat dropdown.", bot_id + 1, recipient_name)
+            # Press Escape to close the dropdown
+            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+            return False
+
+        driver.execute_script("arguments[0].click();", user_option)
+        log.info("Bot %d: Selected chat recipient '%s'.", bot_id + 1, recipient_name)
+        time.sleep(0.5)
+        return True
+
+    except Exception as exc:
+        log.warning("Bot %d: Failed to select recipient '%s': %s", bot_id + 1, recipient_name, exc)
+        return False
+
+
+def send_chat_message(driver, bot_id, message, recipient=""):
     """Open the chat panel and send a message after joining.
+
+    If *recipient* is provided, selects that user from the "To" dropdown
+    to send a direct message instead of messaging Everyone.
 
     Returns True if the message was sent, False otherwise.
     """
@@ -525,6 +613,12 @@ def send_chat_message(driver, bot_id, message):
         else:
             log.info("Bot %d: Chat button not found, trying input directly.", bot_id + 1)
 
+        # Step 1.5: Select specific recipient if provided
+        if recipient:
+            if not _select_chat_recipient(driver, bot_id, recipient):
+                log.warning("Bot %d: Could not select recipient '%s', aborting message.", bot_id + 1, recipient)
+                return False
+
         # Step 2: Find the chat input
         chat_input = None
         for _ in range(3):
@@ -544,9 +638,9 @@ def send_chat_message(driver, bot_id, message):
         time.sleep(0.3)
 
         # Step 4: Send — try Enter key first, then send button
-        from selenium.webdriver.common.keys import Keys
         chat_input.send_keys(Keys.RETURN)
-        log.info("Bot %d: Sent chat message.", bot_id + 1)
+        log.info("Bot %d: Sent chat message%s.", bot_id + 1,
+                 f" to '{recipient}'" if recipient else "")
         return True
 
     except Exception as exc:

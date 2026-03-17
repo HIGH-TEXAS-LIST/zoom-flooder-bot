@@ -118,6 +118,7 @@ def handle_start(data):
             num_bots=data.get("num_bots", 1),
             custom_name=data.get("custom_name", ""),
             use_proxies=data.get("use_proxies", False),
+            chat_recipient=data.get("chat_recipient", ""),
             chat_message=data.get("chat_message", ""),
         )
         manager.start(cfg)

@@ -197,7 +197,11 @@ class BotManager:
 
                     with self._stats_lock:
                         self._join_times.append(elapsed)
-                        if driver:
+                        if driver == "left":
+                            # Bot joined, sent message, and already left gracefully
+                            self._succeeded += 1
+                            self._bot_statuses[bot_id] = BotStatus.LEFT
+                        elif driver:
                             self._active_drivers.append((bot_id + 1, driver))
                             self._succeeded += 1
                             self._bot_statuses[bot_id] = BotStatus.JOINED

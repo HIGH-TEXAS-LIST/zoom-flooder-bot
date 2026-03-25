@@ -1,4 +1,2 @@
 selenium
 webdriver-manager
-flask
-flask-socketio

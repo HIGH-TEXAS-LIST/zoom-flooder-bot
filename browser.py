@@ -2,6 +2,7 @@
 
 import logging
 import os
+import shutil
 import subprocess
 import threading
 
@@ -35,6 +36,14 @@ def _resolve_driver_path():
         if _driver_path_cache is not None:
             return _driver_path_cache
 
+        # Try system chromedriver first to avoid unnecessary downloads
+        system_name = "chromedriver.exe" if os.name == "nt" else "chromedriver"
+        system_path = shutil.which(system_name)
+        if system_path:
+            _driver_path_cache = system_path
+            log.info("ChromeDriver resolved via system PATH: %s", system_path)
+            return _driver_path_cache
+
         if _HAS_MANAGER:
             try:
                 _driver_path_cache = ChromeDriverManager().install()
@@ -42,18 +51,45 @@ def _resolve_driver_path():
                 return _driver_path_cache
             except Exception as exc:
                 log.warning(
-                    "webdriver-manager failed (%s), falling back to local chromedriver.exe",
+                    "webdriver-manager failed (%s), falling back to local %s",
                     exc,
+                    system_name,
                 )
 
-        # Fallback: local chromedriver.exe
-        _driver_path_cache = "chromedriver.exe"
+        # Fallback: system chromedriver (Linux) or local chromedriver.exe (Windows)
+        _driver_path_cache = system_name
         return _driver_path_cache
+
+
+def _resolve_chrome_binary():
+    """Resolve the Chrome/Chromium binary path for Selenium."""
+    # Check env vars first (Docker / CI environments)
+    for env_key in ("CHROME_BIN", "PUPPETEER_EXECUTABLE_PATH"):
+        val = os.environ.get(env_key)
+        if val and os.path.isfile(val):
+            return val
+    # Linux fallback: common Chromium paths
+    if os.name != "nt":
+        for candidate in (
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+    return None
 
 
 def _build_chrome_options(proxy=None):
     """Build a fresh Chrome Options instance with optional proxy."""
     options = Options()
+
+    # Set Chrome binary location if not auto-detected
+    chrome_bin = _resolve_chrome_binary()
+    if chrome_bin:
+        options.binary_location = chrome_bin
+        log.info("Chrome binary: %s", chrome_bin)
 
     # Logging suppression
     options.add_argument("--log-level=3")

@@ -671,6 +671,7 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="",
 
             # ── Send chat message if configured ─────────────────────
             if chat_message and driver:
+                time.sleep(2)  # Let the meeting UI fully render
                 send_chat_message(driver, bot_id, chat_message, chat_recipient)
                 # Auto-leave after sending message
                 time.sleep(1)
@@ -1060,21 +1061,37 @@ def send_chat_message(driver, bot_id, message, recipient=""):
                 except Exception:
                     pass
 
-        # Step 1: Open chat panel
+        # Step 1: Open chat panel — try multiple strategies
         chat_btn = _find_element_multi(driver, _CHAT_BTN_SELECTORS)
 
-        # JS fallback: find any button/element whose text or aria-label contains "Chat"
+        # JS fallback: find any button/element whose text, aria-label, or tooltip
+        # contains "chat" — also checks icon-only buttons with nearby labels
         if not chat_btn:
             try:
                 chat_btn = driver.execute_script("""
-                    var btns = document.querySelectorAll('button, [role="button"]');
+                    var btns = document.querySelectorAll(
+                        'button, [role="button"], [role="tab"], li[role="option"]'
+                    );
                     for (var i = 0; i < btns.length; i++) {
                         var el = btns[i];
                         if (el.offsetWidth === 0 || el.offsetHeight === 0) continue;
                         var txt = (el.textContent || '').trim().toLowerCase();
                         var al  = (el.getAttribute('aria-label') || '').toLowerCase();
-                        if ((txt === 'chat' || al.indexOf('chat') !== -1) &&
+                        var tt  = (el.getAttribute('title') || '').toLowerCase();
+                        var dt  = (el.getAttribute('data-tooltip') || '').toLowerCase();
+                        if ((txt === 'chat' || al.indexOf('chat') !== -1 ||
+                             tt.indexOf('chat') !== -1 || dt.indexOf('chat') !== -1) &&
                             txt.length < 30) return el;
+                    }
+                    // Also check for chat icon inside toolbar footer buttons
+                    var footerBtns = document.querySelectorAll(
+                        '[class*="footer"] button, [class*="toolbar"] button'
+                    );
+                    for (var i = 0; i < footerBtns.length; i++) {
+                        var el = footerBtns[i];
+                        if (el.offsetWidth === 0 || el.offsetHeight === 0) continue;
+                        var al = (el.getAttribute('aria-label') || '').toLowerCase();
+                        if (al.indexOf('chat') !== -1) return el;
                     }
                     return null;
                 """)
@@ -1083,12 +1100,34 @@ def send_chat_message(driver, bot_id, message, recipient=""):
             except Exception:
                 pass
 
+        chat_opened = False
         if chat_btn:
             driver.execute_script("arguments[0].click();", chat_btn)
             log.info("Bot %d: Opened chat panel.", bot_id + 1)
             time.sleep(1.5)
+            chat_opened = True
         else:
-            log.info("Bot %d: Chat button not found, trying input directly.", bot_id + 1)
+            # Keyboard shortcut fallback — Alt+H toggles chat in Zoom web client
+            log.info("Bot %d: Chat button not found, trying Alt+H shortcut.", bot_id + 1)
+            try:
+                body = driver.find_element(By.TAG_NAME, "body")
+                body.send_keys(Keys.ALT, 'h')
+                time.sleep(1.5)
+                # Check if chat panel appeared (look for any chat input)
+                if (_find_element_multi(driver, _CHAT_INPUT_SELECTORS) or
+                        driver.execute_script("""
+                            var el = document.querySelector(
+                                'textarea, [contenteditable="true"]');
+                            return el && el.offsetWidth > 0 ? el : null;
+                        """)):
+                    chat_opened = True
+                    log.info("Bot %d: Chat opened via Alt+H shortcut.", bot_id + 1)
+                else:
+                    log.info("Bot %d: Alt+H didn't open chat, trying input directly.", bot_id + 1)
+            except Exception:
+                log.info("Bot %d: Chat button not found, trying input directly.", bot_id + 1)
+
+        _take_screenshot(driver, bot_id, "after_chat_open_attempt")
 
         # Step 1.5: Select specific recipient if provided
         if recipient:
@@ -1149,6 +1188,33 @@ def send_chat_message(driver, bot_id, message, recipient=""):
                 pass
 
         if not chat_input:
+            # Debug: dump interactive elements so we can update selectors
+            try:
+                debug_info = driver.execute_script("""
+                    var info = [];
+                    // Log all buttons
+                    var btns = document.querySelectorAll('button, [role="button"]');
+                    for (var i = 0; i < Math.min(btns.length, 20); i++) {
+                        var b = btns[i];
+                        info.push('BTN: ' + (b.textContent||'').trim().substring(0,40) +
+                                  ' | aria=' + (b.getAttribute('aria-label')||'') +
+                                  ' | class=' + (b.className||'').substring(0,60));
+                    }
+                    // Log all textareas and contenteditables
+                    var inputs = document.querySelectorAll('textarea, [contenteditable]');
+                    for (var i = 0; i < inputs.length; i++) {
+                        var inp = inputs[i];
+                        info.push('INPUT: tag=' + inp.tagName +
+                                  ' | ph=' + (inp.placeholder||'') +
+                                  ' | aria=' + (inp.getAttribute('aria-label')||'') +
+                                  ' | vis=' + (inp.offsetWidth > 0));
+                    }
+                    return info.join('\\n');
+                """)
+                if debug_info:
+                    log.info("Bot %d: DOM debug dump:\n%s", bot_id + 1, debug_info)
+            except Exception:
+                pass
             log.warning("Bot %d: Chat input not found, cannot send message.", bot_id + 1)
             _take_screenshot(driver, bot_id, "chat_input_not_found")
             return False

@@ -1,7 +1,0 @@
-# Proxy list — one per line
-# Supported formats:
-#   http://host:port
-#   socks5://host:port
-#   http://user:pass@host:port
-#
-# Add your working proxies below:

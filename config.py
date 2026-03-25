@@ -19,14 +19,23 @@ RAM_WARN_THRESHOLD_MB = 4000
 def load_defaults(path=DEFAULT_CONFIG_FILE):
     """Load default thread count, meeting ID, and passcode from config file.
 
-    Raises FileNotFoundError if the config file is missing.
+    Returns a 3-element list of strings.  If the file is missing or
+    contains placeholder text, returns sensible empty defaults.
     """
-    with open(path, "r", encoding="utf-8") as f:
-        lines = [line.strip() for line in f.readlines()]
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = [line.strip() for line in f.readlines()]
+    except FileNotFoundError:
+        return ["1", "", ""]
+
     if len(lines) < 3:
-        log.warning("Config file has fewer than 3 lines, some defaults may be missing.")
         lines.extend([""] * (3 - len(lines)))
-    return lines
+
+    # Ignore placeholder text from the old template
+    cleaned = []
+    for line in lines[:3]:
+        cleaned.append("" if line.lower().startswith("replace") else line)
+    return cleaned
 
 
 def load_names(path=NAMES_FILE):
@@ -88,11 +97,7 @@ def _prompt_int(prompt, default=None):
 
 def get_user_config():
     """Interactive CLI prompt. Returns a config dict."""
-    try:
-        defaults = load_defaults()
-    except FileNotFoundError:
-        log.error("Config file '%s' not found!", DEFAULT_CONFIG_FILE)
-        sys.exit(1)
+    defaults = load_defaults()
 
     names = load_names()
 

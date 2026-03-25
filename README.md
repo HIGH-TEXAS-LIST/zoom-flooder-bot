@@ -1,158 +1,112 @@
 # Zoom Flooder Bot
 
-> **⚠️ Important Notice**
-> This project is provided **for educational and testing purposes only**.
-> **Do not use this software to harass, disrupt, or interfere with meetings you do not own or have explicit permission to test.**
-
----
-
-## Overview
-
-This project demonstrates browser automation using **Python** and **Selenium WebDriver** to automate joining Zoom meetings via a web browser.
-It also showcases **basic multithreading** and process coordination in Python.
-
-**Primary goals of this project:**
-
-* Learn browser automation with Selenium
-* Experiment with multithreading behavior
-* Understand resource management (CPU, RAM, browser instances)
-
----
-
-## ⚠️ Legal & Ethical Warning
-
-Using automation tools against online services **may violate**:
-
-* Zoom’s **Terms of Service**
-* Local or international **computer misuse laws**
-* Workplace, school, or organizational policies
-
-### You are solely responsible for how you use this software.
-
-* **Only use this on meetings you own or have explicit permission to test**
-* **Do not use this to harass, spam, or disrupt others**
-* The author(s) **accept no liability** for misuse, bans, account actions, or legal consequences
-
-If you are unsure whether your use is allowed, **do not run this software**.
-
----
+Automated Zoom meeting joiner with a web-based dashboard. Launches headless Chrome instances that join a meeting, optionally send a chat message to a specific participant, and leave.
 
 ## Features
 
-* Automated Zoom meeting join via browser
-* Configurable number of bot instances
-* Multithreaded execution
-* Optional randomized bot names
-* Controlled shutdown mechanism
+- **Web Dashboard** -- real-time control panel at `http://localhost:5000` with live logs, per-bot status, and start/stop controls.
+- **Batch Launching** -- spin up multiple bots in parallel with configurable thread count.
+- **Chat Messaging** -- send a message on join, optionally targeting a specific participant via the "To" dropdown.
+- **Auto-Restart** -- cycle bots repeatedly on a configurable delay.
+- **Proxy Rotation** -- route each bot through a different proxy (`proxies.txt`).
+- **Random Names** -- pull from a customizable name list (`names.txt`).
+- **Headless Chrome** -- runs in the background using Selenium + ChromeDriver (auto-managed).
 
----
+## Quick Start
 
-## Requirements
+### Prerequisites
 
-* **Python 3.9+** (recommended)
-* Google Chrome (latest stable)
-* ChromeDriver (matching your Chrome version)
+- Python 3.9+
+- Google Chrome (latest stable)
 
-### Python Dependencies
+### Install
 
-* `selenium`
-* `keyboard`
+```bash
+pip install -r requirements.txt
+```
 
----
+Or on Windows, double-click **`start.bat`** -- it will install dependencies automatically and open the dashboard.
 
-## Installation
+### Run
 
-1. Clone the repository:
+**Web dashboard (recommended):**
 
-   ```bash
-   git clone https://github.com/voximir-p/zoom-flooder-bot.git
-   cd zoom-flooder-bot
-   ```
+```bash
+python web_app.py
+```
 
-2. Install Python dependencies:
+Then open `http://localhost:5000` in your browser.
 
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   *(or run `installer.bat` on Windows)*
-
-3. Download **ChromeDriver** from:
-   [https://googlechromelabs.github.io/chrome-for-testing/#stable](https://googlechromelabs.github.io/chrome-for-testing/#stable)
-
-4. Place the ChromeDriver executable in the project root directory.
-
----
-
-## Usage
-
-Run the program:
+**CLI mode:**
 
 ```bash
 python main.py
 ```
 
-The program will prompt you for:
+## Configuration
 
-* Number of threads
-* Zoom meeting ID and passcode
-* Number of bot instances
-* Bot naming preferences
+### Dashboard Fields
 
-> ⚠️ **Resource Warning**
-> Each bot launches a browser instance.
-> High thread or bot counts can cause **high CPU usage, excessive RAM consumption, system instability, or crashes**.
+| Field | Description |
+|---|---|
+| Meeting ID | Zoom meeting ID (digits only) |
+| Passcode | Meeting passcode (leave blank if none) |
+| Thread Count | Max simultaneous bot launches |
+| Number of Bots | Total bots to launch per cycle |
+| Bot Name | Fixed name for all bots, or leave blank for random |
+| Chat Recipient | Send DM to this participant name (blank = Everyone) |
+| Chat Message | Message to send on join (blank = no message) |
+| Use Proxies | Route bots through `proxies.txt` |
+| Auto-Restart | Re-launch bots on a loop with configurable delay |
 
-### Exiting Safely
+### Optional Files
 
-To ensure all browser instances close correctly:
+| File | Purpose |
+|---|---|
+| `names.txt` | One name per line -- bots pick randomly from this list |
+| `proxies.txt` | One proxy per line (`http://host:port`, `socks5://host:port`, or `http://user:pass@host:port`) |
+| `default.txt` | Pre-fill defaults: line 1 = thread count, line 2 = meeting ID, line 3 = passcode |
 
-* Use the built-in exit shortcut: **`Ctrl + Alt + Shift + E`**
-* Avoid force-closing unless instructed by the program
+## Project Structure
 
----
+```
+zoom-flooder-bot/
+  bot.py            # Core Selenium logic: join, chat, leave
+  bot_manager.py    # Thread pool orchestration, lifecycle management
+  browser.py        # ChromeDriver setup (headless, proxy, incognito)
+  config.py         # Config loading (names, proxies, defaults)
+  main.py           # CLI entry point
+  web_app.py        # Flask + SocketIO web dashboard
+  start.bat         # Windows one-click launcher
+  names.txt         # Bot name pool
+  requirements.txt  # Python dependencies
+  static/
+    app.js          # Dashboard frontend JS
+    style.css       # Dashboard styles
+  templates/
+    dashboard.html  # Dashboard HTML template
+```
 
-## Limitations
+## How It Works
 
-* Relies on Zoom’s web UI, which may change at any time
-* Not guaranteed to work with future Zoom updates
-* Browser automation is inherently fragile
+1. **`web_app.py`** (or `main.py`) builds a config dict and passes it to `BotManager`.
+2. **`BotManager`** splits bots into batches and launches them in a `ThreadPoolExecutor`.
+3. Each bot thread calls **`launch_bot()`** in `bot.py`, which:
+   - Creates a headless Chrome instance via `browser.py`
+   - Navigates to the Zoom web client join page
+   - Fills in name/passcode and clicks Join
+   - Dismisses cookie banners and recording notices
+   - Optionally opens chat, selects a recipient, and sends a message
+   - Clicks the Leave button and quits the browser
+4. Status updates stream back to the dashboard via **SocketIO** websockets.
 
----
+## Troubleshooting
 
-## Contributing
-
-Contributions are welcome for:
-
-* Code cleanup and refactoring
-* Improved error handling
-* Documentation improvements
-
-Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Submit a pull request with a clear description
-
----
-
-## Change Log
-
-### v0.1 Beta
-
-* Initial proof-of-concept
-
-### v1.0
-
-* Added multithreading
-* Updated Selenium usage
-* Improved input validation
-* Improved shutdown handling
-* Bug fixes and stability improvements
-
----
+- **ChromeDriver version mismatch** -- `webdriver-manager` handles this automatically. If it fails, make sure Chrome is up to date.
+- **Chat button not found** -- Zoom's web UI changes frequently. The bot uses multiple selector strategies and JS fallbacks. Check `screenshots/` for debug images.
+- **Bots fail to join** -- Verify the meeting ID/passcode. The host may need to enable "Allow participants to join before host" or disable the waiting room.
+- **High RAM usage** -- Each Chrome instance uses ~200 MB. Reduce bot count or thread count if your system is constrained.
 
 ## License
 
-This project is released under the **MIT License**.
-See [LICENSE](LICENSE) file for details.
+MIT -- see [LICENSE](LICENSE).

@@ -133,14 +133,18 @@ def _check_join_errors(driver):
 
 # ── Element helpers ─────────────────────────────────────────────────────────
 def _find_element_multi(driver, selectors):
-    """Try multiple selectors and return the first visible element, or None."""
+    """Try multiple selectors and return the first visible element, or None.
+
+    Uses find_elements (returns [] on miss) to avoid costly exception handling.
+    """
     for by, sel in selectors:
-        try:
-            el = driver.find_element(by, sel)
-            if el.is_displayed():
-                return el
-        except Exception:
-            continue
+        elems = driver.find_elements(by, sel)
+        for el in elems:
+            try:
+                if el.is_displayed():
+                    return el
+            except Exception:
+                continue
     return None
 
 
@@ -375,22 +379,26 @@ def _dismiss_gates(driver, bot_id):
         (By.XPATH, "//button[contains(@id, 'accept')]"),
     ]
     for by, sel in _COOKIE_ACCEPT:
-        try:
-            btn = driver.find_element(by, sel)
-            if btn.is_displayed():
-                btn.click()
-                log.info("Bot %d: Accepted cookies.", bot_id + 1)
-                time.sleep(1)
-                break
-        except Exception:
+        elems = driver.find_elements(by, sel)
+        for btn in elems:
+            try:
+                if btn.is_displayed():
+                    btn.click()
+                    log.info("Bot %d: Accepted cookies.", bot_id + 1)
+                    time.sleep(0.5)
+                    break
+            except Exception:
+                continue
+        else:
             continue
+        break
 
     # 2. Accept Zoom disclaimer / terms of service (use JS click — may be behind overlay)
     try:
         btn = driver.find_element(By.ID, "disclaimer_agree")
         driver.execute_script("arguments[0].click();", btn)
         log.info("Bot %d: Accepted disclaimer.", bot_id + 1)
-        time.sleep(2)
+        time.sleep(1)
     except Exception:
         # Fallback: try text-based selectors
         for by, sel in [
@@ -398,14 +406,15 @@ def _dismiss_gates(driver, bot_id):
             (By.XPATH, "//button[contains(text(), 'Accept')]"),
             (By.XPATH, "//button[contains(text(), 'I Agree')]"),
         ]:
-            try:
-                btn = driver.find_element(by, sel)
-                driver.execute_script("arguments[0].click();", btn)
-                log.info("Bot %d: Accepted disclaimer (fallback).", bot_id + 1)
-                time.sleep(2)
-                break
-            except Exception:
-                continue
+            elems = driver.find_elements(by, sel)
+            if elems:
+                try:
+                    driver.execute_script("arguments[0].click();", elems[0])
+                    log.info("Bot %d: Accepted disclaimer (fallback).", bot_id + 1)
+                    time.sleep(1)
+                    break
+                except Exception:
+                    continue
 
     # 3. Handle "Continue" button (audio/video prompt)
     for by, sel in [
@@ -415,15 +424,19 @@ def _dismiss_gates(driver, bot_id):
         (By.XPATH, "//span[contains(text(), 'Computer Audio')]"),
         (By.CSS_SELECTOR, "button[aria-label*='Join Audio' i]"),
     ]:
-        try:
-            btn = driver.find_element(by, sel)
-            if btn.is_displayed():
-                driver.execute_script("arguments[0].click();", btn)
-                log.info("Bot %d: Clicked continue/audio.", bot_id + 1)
-                time.sleep(1)
-                break
-        except Exception:
+        elems = driver.find_elements(by, sel)
+        for btn in elems:
+            try:
+                if btn.is_displayed():
+                    driver.execute_script("arguments[0].click();", btn)
+                    log.info("Bot %d: Clicked continue/audio.", bot_id + 1)
+                    time.sleep(0.5)
+                    break
+            except Exception:
+                continue
+        else:
             continue
+        break
 
     # 4. Dismiss recording notice ("Got it" button)
     for by, sel in [
@@ -431,15 +444,19 @@ def _dismiss_gates(driver, bot_id):
         (By.XPATH, "//button[contains(text(), 'got it')]"),
         (By.XPATH, "//button[contains(text(), 'OK')]"),
     ]:
-        try:
-            btn = driver.find_element(by, sel)
-            if btn.is_displayed():
-                driver.execute_script("arguments[0].click();", btn)
-                log.info("Bot %d: Dismissed recording notice.", bot_id + 1)
-                time.sleep(1)
-                break
-        except Exception:
+        elems = driver.find_elements(by, sel)
+        for btn in elems:
+            try:
+                if btn.is_displayed():
+                    driver.execute_script("arguments[0].click();", btn)
+                    log.info("Bot %d: Dismissed recording notice.", bot_id + 1)
+                    time.sleep(0.5)
+                    break
+            except Exception:
+                continue
+        else:
             continue
+        break
 
 
 # ── Main bot launcher ───────────────────────────────────────────────────────
@@ -467,31 +484,42 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="",
             if proxy:
                 log.info("Bot %d: Using proxy %s", bot_id + 1,
                          proxy.split("@")[-1] if "@" in proxy else proxy)
-            driver = create_driver(proxy=proxy)
+            try:
+                driver = create_driver(proxy=proxy)
+            except Exception as drv_exc:
+                log.warning("Bot %d: Driver creation failed: %s", bot_id + 1, drv_exc)
+                driver = None
+                time.sleep(2)
+                continue
             wait = WebDriverWait(driver, ELEMENT_WAIT_TIMEOUT)
 
             driver.get(JOIN_URL.format(meeting_id=meeting_id))
 
             bot_name = custom_name or _pick_unique_name()
 
-            # Wait for page to fully load (Zoom SPA needs time)
+            # Wait for page to load — use WebDriverWait instead of fixed sleep
             if _stopped():
                 driver.quit(); driver = None
                 return (None, time.monotonic() - t_start)
-            time.sleep(5)
+            try:
+                WebDriverWait(driver, 8).until(
+                    lambda d: d.execute_script("return document.readyState") == "complete"
+                )
+            except TimeoutException:
+                pass  # proceed anyway — SPA may still be loading components
 
             # ── Dismiss pre-join gates (cookies, disclaimer, etc.) ──────
             driver.switch_to.default_content()
             _dismiss_gates(driver, bot_id)
 
             # Wait for the web client to load after dismissing gates
-            # Poll for form with increasing waits (SPA may need time to render)
+            # Poll for form with short waits (SPA may need time to render)
             form_found = False
-            for wait_step in range(6):
+            for wait_step in range(8):
                 if _stopped():
                     driver.quit(); driver = None
                     return (None, time.monotonic() - t_start)
-                time.sleep(2)
+                time.sleep(1.5)
                 driver.switch_to.default_content()
                 if _switch_to_zoom_content(driver, bot_id):
                     form_found = True
@@ -554,17 +582,17 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="",
 
             # ── Step 2: Handle passcode on second page (if needed) ──
             if not pwd_el:
-                time.sleep(3)
+                time.sleep(2)
                 # Re-check frames after page transition
                 driver.switch_to.default_content()
                 _switch_to_zoom_content(driver, bot_id)
 
                 pwd_el = None
-                for _ in range(5):
+                for _ in range(6):
                     pwd_el = _find_element_multi(driver, _PWD_SELECTORS) or _find_element_js(driver, 'password')
                     if pwd_el:
                         break
-                    time.sleep(2)
+                    time.sleep(1.5)
 
                 if pwd_el:
                     pwd_el.clear()
@@ -756,25 +784,39 @@ def _select_chat_recipient(driver, bot_id, recipient_name):
         log.info("Bot %d: Clicking recipient dropdown: '%s'",
                  bot_id + 1, receiver_btn.get_attribute("aria-label") or receiver_btn.text or "(no label)")
         driver.execute_script("arguments[0].click();", receiver_btn)
-        time.sleep(2)
+        time.sleep(1.5)
         _take_screenshot(driver, bot_id, "dropdown_opened")
 
         recipient_lower = recipient_name.lower().strip()
-        name_parts = [p.lower() for p in recipient_name.split() if len(p) > 2]
+        # Require parts to be > 4 chars to avoid false partial matches
+        # (e.g. 'high' from 'HIGH TΞXΛS' matching 'HighSpeedWeed')
+        name_parts = [p.lower() for p in recipient_name.split() if len(p) > 4]
 
         # Use JavaScript to find dropdown items — Zoom renders them in a scroll container
-        # that Selenium's normal element search sometimes misses
+        # that Selenium's normal element search sometimes misses.
+        # Returns {texts: [...], elements: [...]} — elements are live DOM refs (no stale index)
         JS_FIND_DROPDOWN = """
-        // Strategy 1: Find the dropdown/popover container that appeared after click
-        // Look for elements with role=listbox, role=menu, or class containing 'dropdown'/'popover'
         var results = [];
+        var elements = [];
+        var seenTexts = {};
+
+        function addItem(el) {
+            var text = (el.textContent || '').trim().split('\\n')[0].trim();
+            if (!text || text.length > 80 || text.length < 3) return;
+            if (/^\\((?:Co-host|Host|Panelist)\\)$/i.test(text)) return;
+            var key = text.toLowerCase();
+            if (seenTexts[key]) return;
+            seenTexts[key] = true;
+            results.push(text);
+            elements.push(el);
+        }
+
+        // Strategy 1: Find dropdown/popover containers
         var containers = document.querySelectorAll(
             '[role="listbox"], [role="menu"], [role="dialog"], ' +
             '[class*="dropdown"], [class*="popover"], [class*="receiver"], ' +
             '[class*="chat-receiver"], [class*="select"], [class*="popup"]'
         );
-
-        // Also check for any scrollable container that appeared in the chat area
         if (containers.length === 0) {
             containers = document.querySelectorAll('[style*="overflow"], [class*="scroll"], [class*="list"]');
         }
@@ -786,100 +828,102 @@ def _select_chat_recipient(driver, bot_id, recipient_name):
             var style = window.getComputedStyle(container);
             if (style.display === 'none' || style.visibility === 'hidden') continue;
 
-            // Get all child text elements
             var children = container.querySelectorAll('*');
             for (var i = 0; i < children.length; i++) {
                 var el = children[i];
                 var elRect = el.getBoundingClientRect();
                 if (elRect.width < 30 || elRect.height < 10) continue;
-                // Get direct text (not deeply nested text)
-                var text = '';
-                for (var n = 0; n < el.childNodes.length; n++) {
-                    if (el.childNodes[n].nodeType === 3) text += el.childNodes[n].textContent;
-                }
-                text = text.trim();
-                if (!text) text = (el.textContent || '').trim();
-                if (!text || text.length > 80 || text.length < 3) continue;
-                results.push({text: text, tag: el.tagName, idx: Array.from(document.querySelectorAll('*')).indexOf(el)});
+                addItem(el);
             }
         }
 
-        // Strategy 2: If nothing found, do a broader scan for elements near the "Everyone" text
+        // Strategy 2: Broader scan near "Everyone" text
         if (results.length === 0) {
             var allEls = document.querySelectorAll('*');
-            var everyoneEl = null;
             for (var i = 0; i < allEls.length; i++) {
                 if ((allEls[i].textContent || '').trim() === 'Everyone' && allEls[i].offsetHeight > 0) {
-                    everyoneEl = allEls[i];
+                    var parent = allEls[i].parentElement;
+                    while (parent && parent.children.length < 3) parent = parent.parentElement;
+                    if (parent) {
+                        var siblings = parent.querySelectorAll('*');
+                        for (var j = 0; j < siblings.length; j++) {
+                            if (siblings[j].children.length > 2) continue;
+                            addItem(siblings[j]);
+                        }
+                    }
                     break;
                 }
             }
-            if (everyoneEl) {
-                // Get the parent container and scan siblings
-                var parent = everyoneEl.parentElement;
-                while (parent && parent.children.length < 3) parent = parent.parentElement;
-                if (parent) {
-                    var siblings = parent.querySelectorAll('*');
-                    for (var i = 0; i < siblings.length; i++) {
-                        var el = siblings[i];
-                        var text = (el.textContent || '').trim().split('\\n')[0].trim();
-                        if (!text || text.length > 80 || text.length < 3) continue;
-                        if (el.children.length > 2) continue;
-                        results.push({text: text, tag: el.tagName, idx: Array.from(document.querySelectorAll('*')).indexOf(el)});
-                    }
-                }
-            }
         }
 
+        // Store elements on window so Python can reference them by index
+        window.__dropdownElements = elements;
         return results;
         """
 
         try:
-            all_items = driver.execute_script(JS_FIND_DROPDOWN)
+            all_texts = driver.execute_script(JS_FIND_DROPDOWN)
             # Filter to likely dropdown items (exclude toolbar text)
             toolbar_noise = {'audio', 'video', 'participants', 'more', 'leave',
                              'raise hand', 'reactions', 'share screen', 'chat',
                              'meeting chat', 'type message here ...', 'ok', 'new',
                              'floating reactions', 'who can see your messages?'}
-            dropdown_names = []
-            for item in all_items:
-                text = item['text'].strip()
-                text_clean = text.split('\n')[0].strip()  # First line only
-                if text_clean.lower() in toolbar_noise:
+            # Build filtered list: (index_in_elements_array, display_text)
+            dropdown_items = []
+            for i, text in enumerate(all_texts):
+                text_clean = text.strip()
+                if text_clean.lower() in toolbar_noise or len(text_clean) < 3:
                     continue
-                if len(text_clean) < 3:
-                    continue
-                dropdown_names.append(item)
+                dropdown_items.append((i, text_clean))
 
-            # Log what we found
-            found_names = [d['text'].split('\n')[0].strip() for d in dropdown_names[:20]]
+            found_names = [t for _, t in dropdown_items[:20]]
             log.info("Bot %d: Dropdown items found via JS: %s", bot_id + 1, found_names)
 
-            # Search for recipient
-            matched_idx = None
-            for item in dropdown_names:
-                item_text = item['text'].lower()
-                item_first = item['text'].split('\n')[0].strip().lower()
-                # Exact or contains match
-                if recipient_lower in item_first:
-                    matched_idx = item['idx']
-                    log.info("Bot %d: Matched recipient '%s' -> '%s'",
-                             bot_id + 1, recipient_name, item['text'].split(chr(10))[0].strip())
-                    break
-                # Partial name match
-                if any(part in item_first for part in name_parts):
-                    if item_first not in toolbar_noise:
-                        matched_idx = item['idx']
-                        log.info("Bot %d: Partial name match '%s' -> '%s'",
-                                 bot_id + 1, recipient_name, item['text'].split(chr(10))[0].strip())
-                        break
+            # Search for recipient — two passes: exact/contains first, then partial
+            matched_el_idx = None
+            matched_name = None
 
-            if matched_idx is not None:
-                # Click the matched element via JS index
-                driver.execute_script(f"""
-                    var allEls = document.querySelectorAll('*');
-                    allEls[{matched_idx}].click();
-                """)
+            # Pass 1: exact or contains match (high confidence)
+            for el_idx, text in dropdown_items:
+                text_lower = text.lower()
+                if recipient_lower in text_lower or text_lower in recipient_lower:
+                    matched_el_idx = el_idx
+                    matched_name = text
+                    log.info("Bot %d: Matched recipient '%s' -> '%s'",
+                             bot_id + 1, recipient_name, text)
+                    break
+
+            # Pass 2: partial name match — require majority of parts to match
+            if matched_el_idx is None and name_parts:
+                best_score = 0
+                best_idx = None
+                best_text = None
+                for el_idx, text in dropdown_items:
+                    text_lower = text.lower()
+                    if text_lower in toolbar_noise:
+                        continue
+                    hits = sum(1 for part in name_parts if part in text_lower)
+                    score = hits / len(name_parts)
+                    if hits > 0 and score > best_score:
+                        best_score = score
+                        best_idx = el_idx
+                        best_text = text
+                # Require at least 50% of name parts to match
+                if best_idx is not None and best_score >= 0.5:
+                    matched_el_idx = best_idx
+                    matched_name = best_text
+                    log.info("Bot %d: Partial name match '%s' -> '%s' (%.0f%% parts matched)",
+                             bot_id + 1, recipient_name, best_text, best_score * 100)
+                elif best_text:
+                    log.warning("Bot %d: Best partial match '%s' -> '%s' too weak (%.0f%%), skipping",
+                                bot_id + 1, recipient_name, best_text, best_score * 100)
+
+            if matched_el_idx is not None:
+                # Click using the live element reference (no stale DOM index)
+                driver.execute_script(
+                    "window.__dropdownElements[arguments[0]].click();",
+                    matched_el_idx,
+                )
                 log.info("Bot %d: Selected chat recipient '%s'.", bot_id + 1, recipient_name)
                 time.sleep(1)
                 _take_screenshot(driver, bot_id, "recipient_selected")
@@ -987,7 +1031,7 @@ def send_chat_message(driver, bot_id, message, recipient=""):
         if chat_btn:
             driver.execute_script("arguments[0].click();", chat_btn)
             log.info("Bot %d: Opened chat panel.", bot_id + 1)
-            time.sleep(1.5)
+            time.sleep(1)
         else:
             log.info("Bot %d: Chat button not found, trying input directly.", bot_id + 1)
 
@@ -999,30 +1043,27 @@ def send_chat_message(driver, bot_id, message, recipient=""):
                 _take_screenshot(driver, bot_id, "recipient_not_found")
 
         # Step 2: Find the chat input (re-locate iframe if needed after dropdown interaction)
-        chat_input = None
-        for attempt in range(5):
-            chat_input = _find_element_multi(driver, _CHAT_INPUT_SELECTORS)
-            if chat_input:
-                break
+        chat_input = _find_element_multi(driver, _CHAT_INPUT_SELECTORS)
+        if not chat_input:
             # Try switching frames — dropdown interaction may have changed focus
-            if attempt == 1:
-                driver.switch_to.default_content()
-                iframes = driver.find_elements(By.TAG_NAME, "iframe")
-                for iframe in iframes:
+            driver.switch_to.default_content()
+            iframes = driver.find_elements(By.TAG_NAME, "iframe")
+            for iframe in iframes:
+                try:
+                    driver.switch_to.frame(iframe)
+                    chat_input = _find_element_multi(driver, _CHAT_INPUT_SELECTORS)
+                    if chat_input:
+                        break
+                    driver.switch_to.default_content()
+                except Exception:
                     try:
-                        driver.switch_to.frame(iframe)
-                        chat_input = _find_element_multi(driver, _CHAT_INPUT_SELECTORS)
-                        if chat_input:
-                            break
                         driver.switch_to.default_content()
                     except Exception:
-                        try:
-                            driver.switch_to.default_content()
-                        except Exception:
-                            pass
-                if chat_input:
-                    break
+                        pass
+        if not chat_input:
+            # Brief wait and retry — panel may still be animating
             time.sleep(1)
+            chat_input = _find_element_multi(driver, _CHAT_INPUT_SELECTORS)
 
         if not chat_input:
             # JS fallback: find any textarea or contenteditable with chat-like placeholder

@@ -104,6 +104,15 @@ def _build_chrome_options(proxy=None):
     options.add_argument("--headless=new")  # modern headless (faster + more stable)
     options.add_argument("--incognito")
 
+    # Anti-automation detection
+    options.add_argument("--disable-blink-features=AutomationControlled")
+
+    # Performance — prevent Chrome from throttling headless/background tabs
+    options.add_argument("--disable-background-timer-throttling")
+    options.add_argument("--disable-backgrounding-occluded-windows")
+    options.add_argument("--disable-renderer-backgrounding")
+    options.page_load_strategy = "eager"  # don't wait for images/css, just DOM
+
     # GPU / rendering — save memory
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
@@ -118,10 +127,7 @@ def _build_chrome_options(proxy=None):
 
     # Proxy
     if proxy:
-        if proxy.startswith("socks"):
-            options.add_argument(f"--proxy-server={proxy}")
-        else:
-            options.add_argument(f"--proxy-server={proxy}")
+        options.add_argument(f"--proxy-server={proxy}")
         log.debug("Using proxy: %s", proxy.split("@")[-1] if "@" in proxy else proxy)
 
     # Permissions

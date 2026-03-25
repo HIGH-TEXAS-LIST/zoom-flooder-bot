@@ -21,7 +21,7 @@ def load_defaults(path=DEFAULT_CONFIG_FILE):
 
     Raises FileNotFoundError if the config file is missing.
     """
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         lines = [line.strip() for line in f.readlines()]
     if len(lines) < 3:
         log.warning("Config file has fewer than 3 lines, some defaults may be missing.")
@@ -32,7 +32,7 @@ def load_defaults(path=DEFAULT_CONFIG_FILE):
 def load_names(path=NAMES_FILE):
     """Load randomized bot names from file."""
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             names = [name.strip() for name in f if name.strip()]
         if not names:
             log.warning("'%s' is empty, using fallback names.", path)
@@ -46,7 +46,7 @@ def load_names(path=NAMES_FILE):
 def load_proxies(path=PROXIES_FILE):
     """Load proxy list from file. Returns empty list if none found."""
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             proxies = [
                 line.strip() for line in f
                 if line.strip() and not line.strip().startswith("#")

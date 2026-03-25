@@ -8,6 +8,7 @@ import time
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import (
@@ -198,6 +199,35 @@ def _find_element_js(driver, role):
         return driver.execute_script(JS, role)
     except Exception:
         return None
+
+
+def _activate_toolbar(driver):
+    """Move mouse to bottom of viewport to reveal Zoom's auto-hiding toolbar.
+
+    The Zoom web client hides the meeting toolbar after a few seconds of
+    inactivity.  Moving the mouse to the bottom-center forces it to reappear.
+    """
+    try:
+        vw = driver.execute_script("return window.innerWidth  || document.documentElement.clientWidth")
+        vh = driver.execute_script("return window.innerHeight || document.documentElement.clientHeight")
+        body = driver.find_element(By.TAG_NAME, "body")
+        ActionChains(driver).move_to_element_with_offset(body, 0, 0) \
+            .move_by_offset(vw // 2, vh - 5).perform()
+        time.sleep(0.8)
+    except Exception:
+        # Fallback: trigger mousemove via JS
+        try:
+            driver.execute_script("""
+                var e = new MouseEvent('mousemove', {
+                    clientX: window.innerWidth / 2,
+                    clientY: window.innerHeight - 5,
+                    bubbles: true
+                });
+                document.dispatchEvent(e);
+            """)
+            time.sleep(0.8)
+        except Exception:
+            pass
 
 
 def _has_join_form(driver):
@@ -1012,11 +1042,15 @@ def send_chat_message(driver, bot_id, message, recipient=""):
     try:
         driver.switch_to.default_content()
 
+        # Activate the toolbar so chat button is visible
+        _activate_toolbar(driver)
+
         # Switch into Zoom iframe if needed
         iframes = driver.find_elements(By.TAG_NAME, "iframe")
         for iframe in iframes:
             try:
                 driver.switch_to.frame(iframe)
+                _activate_toolbar(driver)
                 if _find_element_multi(driver, _CHAT_BTN_SELECTORS):
                     break
                 driver.switch_to.default_content()
@@ -1028,10 +1062,31 @@ def send_chat_message(driver, bot_id, message, recipient=""):
 
         # Step 1: Open chat panel
         chat_btn = _find_element_multi(driver, _CHAT_BTN_SELECTORS)
+
+        # JS fallback: find any button/element whose text or aria-label contains "Chat"
+        if not chat_btn:
+            try:
+                chat_btn = driver.execute_script("""
+                    var btns = document.querySelectorAll('button, [role="button"]');
+                    for (var i = 0; i < btns.length; i++) {
+                        var el = btns[i];
+                        if (el.offsetWidth === 0 || el.offsetHeight === 0) continue;
+                        var txt = (el.textContent || '').trim().toLowerCase();
+                        var al  = (el.getAttribute('aria-label') || '').toLowerCase();
+                        if ((txt === 'chat' || al.indexOf('chat') !== -1) &&
+                            txt.length < 30) return el;
+                    }
+                    return null;
+                """)
+                if chat_btn:
+                    log.info("Bot %d: Found chat button via JS fallback.", bot_id + 1)
+            except Exception:
+                pass
+
         if chat_btn:
             driver.execute_script("arguments[0].click();", chat_btn)
             log.info("Bot %d: Opened chat panel.", bot_id + 1)
-            time.sleep(1)
+            time.sleep(1.5)
         else:
             log.info("Bot %d: Chat button not found, trying input directly.", bot_id + 1)
 
@@ -1126,6 +1181,10 @@ _LEAVE_BTN_SELECTORS = [
     (By.CSS_SELECTOR, "button.footer__leave-btn"),
     (By.XPATH, "//button[contains(text(), 'Leave')]"),
     (By.XPATH, "//div[contains(text(), 'Leave meeting')]"),
+    # Newer Zoom web client — red Leave button (top-right or toolbar)
+    (By.CSS_SELECTOR, "button[class*='leave']"),
+    (By.CSS_SELECTOR, "[data-testid*='leave']"),
+    (By.XPATH, "//button[.//span[contains(text(), 'Leave')]]"),
 ]
 _LEAVE_CONFIRM_SELECTORS = [
     (By.XPATH, "//button[contains(@class, 'leave-meeting-options__btn')]"),
@@ -1135,6 +1194,10 @@ _LEAVE_CONFIRM_SELECTORS = [
     (By.CSS_SELECTOR, ".leave-meeting-options__btn"),
     (By.CSS_SELECTOR, "button[data-testid='leave-meeting-btn']"),
     (By.XPATH, "//button[contains(@class, 'zm-btn--primary')][contains(text(), 'Leave')]"),
+    # Newer Zoom web client confirmation dialog
+    (By.CSS_SELECTOR, "[data-testid*='leave'] button"),
+    (By.XPATH, "//button[.//span[contains(text(), 'Leave Meeting')]]"),
+    (By.XPATH, "//button[.//span[contains(text(), 'Leave meeting')]]"),
 ]
 
 LEAVE_TIMEOUT = 5
@@ -1149,11 +1212,15 @@ def leave_meeting(driver, bot_id):
     try:
         driver.switch_to.default_content()
 
+        # Activate toolbar so the Leave button is visible
+        _activate_toolbar(driver)
+
         # Switch into the Zoom iframe if needed
         iframes = driver.find_elements(By.TAG_NAME, "iframe")
         for iframe in iframes:
             try:
                 driver.switch_to.frame(iframe)
+                _activate_toolbar(driver)
                 if _find_element_multi(driver, _LEAVE_BTN_SELECTORS):
                     break
                 driver.switch_to.default_content()
@@ -1165,16 +1232,55 @@ def leave_meeting(driver, bot_id):
 
         # Step 1: Click the "Leave" button in the meeting toolbar
         leave_btn = _find_element_multi(driver, _LEAVE_BTN_SELECTORS)
+
+        # JS fallback: find any button/element with "Leave" text
         if not leave_btn:
-            log.debug("Bot %d: Leave button not found, skipping graceful leave.", bot_id)
+            try:
+                leave_btn = driver.execute_script("""
+                    var btns = document.querySelectorAll('button, [role="button"]');
+                    for (var i = 0; i < btns.length; i++) {
+                        var el = btns[i];
+                        if (el.offsetWidth === 0 || el.offsetHeight === 0) continue;
+                        var txt = (el.textContent || '').trim().toLowerCase();
+                        var al  = (el.getAttribute('aria-label') || '').toLowerCase();
+                        if ((txt === 'leave' || txt.indexOf('leave') !== -1 ||
+                             al.indexOf('leave') !== -1) && txt.length < 30) return el;
+                    }
+                    return null;
+                """)
+                if leave_btn:
+                    log.info("Bot %d: Found leave button via JS fallback.", bot_id)
+            except Exception:
+                pass
+
+        if not leave_btn:
+            log.warning("Bot %d: Leave button not found, skipping graceful leave.", bot_id)
+            _take_screenshot(driver, bot_id - 1, "leave_btn_not_found")
             return False
 
         driver.execute_script("arguments[0].click();", leave_btn)
         log.info("Bot %d: Clicked leave button.", bot_id)
-        time.sleep(1)
+        time.sleep(1.5)
 
         # Step 2: Click "Leave Meeting" on the confirmation dialog
         confirm_btn = _find_element_multi(driver, _LEAVE_CONFIRM_SELECTORS)
+
+        # JS fallback for confirmation button
+        if not confirm_btn:
+            try:
+                confirm_btn = driver.execute_script("""
+                    var btns = document.querySelectorAll('button, [role="button"]');
+                    for (var i = 0; i < btns.length; i++) {
+                        var el = btns[i];
+                        if (el.offsetWidth === 0 || el.offsetHeight === 0) continue;
+                        var txt = (el.textContent || '').trim().toLowerCase();
+                        if (txt === 'leave meeting' || txt === 'leave') return el;
+                    }
+                    return null;
+                """)
+            except Exception:
+                pass
+
         if confirm_btn:
             driver.execute_script("arguments[0].click();", confirm_btn)
             log.info("Bot %d: Confirmed leave meeting.", bot_id)

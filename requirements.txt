@@ -2,3 +2,6 @@ selenium
 webdriver-manager
 flask
 flask-socketio
+python-dotenv
+discord.py>=2.0
+python-telegram-bot>=20.0

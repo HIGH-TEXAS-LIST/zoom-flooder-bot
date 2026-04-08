@@ -13,8 +13,9 @@ import re
 from flask import Flask, render_template, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
 
-from config import build_config, get_defaults_dict, load_proxies, check_proxy_health
+from config import build_config, get_defaults_dict, load_proxies, check_proxy_health, load_integration_config
 from bot_manager import BotManager, BotStatus
+from scheduler import RaidScheduler
 
 # ── App setup ────────────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -144,7 +145,7 @@ def handle_start(data):
     try:
         cfg = build_config(
             meeting_id=data["meeting_id"],
-            passcode=data["passcode"],
+            passcode=data.get("passcode", ""),
             thread_count=data.get("thread_count", 1),
             num_bots=data.get("num_bots", 1),
             custom_name=data.get("custom_name", ""),
@@ -161,6 +162,8 @@ def handle_start(data):
             persist_reaction_interval=data.get("persist_reaction_interval", 0),
             chat_repeat_count=data.get("chat_repeat_count", 0),
             chat_repeat_delay=data.get("chat_repeat_delay", 2.0),
+            chat_monitor_target=data.get("chat_monitor_target", ""),
+            chat_monitor_reply=data.get("chat_monitor_reply", ""),
         )
         manager.start(cfg)
         emit("status", {"ok": True, "message": "Launch started."})
@@ -168,6 +171,50 @@ def handle_start(data):
         emit("status", {"ok": False, "message": str(exc)})
     except Exception as exc:
         emit("status", {"ok": False, "message": f"Config error: {exc}"})
+
+
+@socketio.on("stage")
+def handle_stage(data):
+    """Launch bots but hold them at the form — waiting for deploy signal."""
+    try:
+        cfg = build_config(
+            meeting_id=data["meeting_id"],
+            passcode=data.get("passcode", ""),
+            thread_count=data.get("thread_count", 1),
+            num_bots=data.get("num_bots", 1),
+            custom_name=data.get("custom_name", ""),
+            use_proxies=data.get("use_proxies", False),
+            chat_recipient=data.get("chat_recipient", ""),
+            chat_message=data.get("chat_message", ""),
+            waiting_room_timeout=data.get("waiting_room_timeout", 60),
+            reactions=data.get("reactions", []),
+            reaction_count=data.get("reaction_count", 0),
+            reaction_delay=data.get("reaction_delay", 1.0),
+            persist_mode=data.get("persist_mode", False),
+            persist_interval=data.get("persist_interval", 30),
+            persist_chat_interval=data.get("persist_chat_interval", 0),
+            persist_reaction_interval=data.get("persist_reaction_interval", 0),
+            chat_repeat_count=data.get("chat_repeat_count", 0),
+            chat_repeat_delay=data.get("chat_repeat_delay", 2.0),
+            chat_monitor_target=data.get("chat_monitor_target", ""),
+            chat_monitor_reply=data.get("chat_monitor_reply", ""),
+        )
+        manager.stage(cfg)
+        emit("status", {"ok": True, "message": "Staging started — bots will wait for deploy."})
+    except RuntimeError as exc:
+        emit("status", {"ok": False, "message": str(exc)})
+    except Exception as exc:
+        emit("status", {"ok": False, "message": f"Config error: {exc}"})
+
+
+@socketio.on("deploy")
+def handle_deploy():
+    """Release all staged bots to click Join simultaneously."""
+    try:
+        manager.deploy()
+        emit("status", {"ok": True, "message": "Deploy signal sent!"})
+    except Exception as exc:
+        emit("status", {"ok": False, "message": f"Deploy error: {exc}"})
 
 
 @socketio.on("stop")
@@ -209,95 +256,84 @@ def handle_check_proxies():
     emit("status", {"ok": True, "message": "Proxy health check started…"})
 
 
-# ── Scheduled raids ──────────────────────────────────────────────────────────
-_schedules = {}  # id -> {config, scheduled_time, timer}
-_schedule_counter = 0
+# ── SQLite-backed Scheduled Raids ────────────────────────────────────────────
+
+def _broadcast_schedules():
+    """Push the current schedule list to all connected dashboard clients."""
+    socketio.emit("schedule_update", raid_scheduler.list_pending())
+
+
+raid_scheduler = RaidScheduler(bot_manager=manager, on_update=_broadcast_schedules)
 
 
 @socketio.on("schedule_raid")
 def handle_schedule_raid(data):
-    global _schedule_counter
-    from datetime import datetime
-
     try:
-        scheduled_time = datetime.fromisoformat(data["scheduled_time"])
-        delay = (scheduled_time - datetime.now()).total_seconds()
-        if delay <= 0:
-            emit("status", {"ok": False, "message": "Scheduled time must be in the future."})
-            return
-
-        _schedule_counter += 1
-        sid = str(_schedule_counter)
-
-        cfg = build_config(
-            meeting_id=data["meeting_id"],
-            passcode=data["passcode"],
-            thread_count=data.get("thread_count", 1),
-            num_bots=data.get("num_bots", 1),
-            custom_name=data.get("custom_name", ""),
-            use_proxies=data.get("use_proxies", False),
-            chat_recipient=data.get("chat_recipient", ""),
-            chat_message=data.get("chat_message", ""),
-            reactions=data.get("reactions", []),
-            reaction_count=data.get("reaction_count", 0),
-            reaction_delay=data.get("reaction_delay", 1.0),
-            chat_repeat_count=data.get("chat_repeat_count", 0),
-            chat_repeat_delay=data.get("chat_repeat_delay", 2.0),
-            waiting_room_timeout=data.get("waiting_room_timeout", 60),
-        )
-
-        def _fire():
-            log.info("Scheduled raid %s firing now!", sid)
-            try:
-                manager.start(cfg)
-            except RuntimeError as exc:
-                log.warning("Scheduled raid %s failed: %s", sid, exc)
-            _schedules.pop(sid, None)
-            socketio.emit("schedule_update", _get_schedules_list())
-
-        import threading
-        timer = threading.Timer(delay, _fire)
-        timer.daemon = True
-        timer.start()
-
-        _schedules[sid] = {
-            "id": sid,
-            "meeting_id": data["meeting_id"],
-            "scheduled_time": data["scheduled_time"],
-            "num_bots": data.get("num_bots", 1),
-            "timer": timer,
-        }
-
-        socketio.emit("schedule_update", _get_schedules_list())
-        emit("status", {"ok": True, "message": f"Raid scheduled for {data['scheduled_time']}."})
+        raid_id = raid_scheduler.schedule_raid(data, data["scheduled_time"], source="web")
+        emit("status", {"ok": True, "message": f"Raid #{raid_id} scheduled for {data['scheduled_time']}."})
+    except ValueError as exc:
+        emit("status", {"ok": False, "message": str(exc)})
     except Exception as exc:
         emit("status", {"ok": False, "message": f"Schedule error: {exc}"})
 
 
 @socketio.on("cancel_schedule")
 def handle_cancel_schedule(data):
-    sid = data.get("id")
-    sched = _schedules.pop(sid, None)
-    if sched and sched.get("timer"):
-        sched["timer"].cancel()
-        emit("status", {"ok": True, "message": f"Schedule {sid} cancelled."})
+    raid_id = data.get("id")
+    try:
+        raid_id = int(raid_id)
+    except (TypeError, ValueError):
+        emit("status", {"ok": False, "message": "Invalid raid ID."})
+        return
+    if raid_scheduler.cancel_raid(raid_id):
+        emit("status", {"ok": True, "message": f"Raid #{raid_id} cancelled."})
     else:
-        emit("status", {"ok": False, "message": "Schedule not found."})
-    socketio.emit("schedule_update", _get_schedules_list())
+        emit("status", {"ok": False, "message": "Schedule not found or already fired."})
 
 
 @socketio.on("list_schedules")
 def handle_list_schedules():
-    emit("schedule_update", _get_schedules_list())
-
-
-def _get_schedules_list():
-    return [{"id": s["id"], "meeting_id": s["meeting_id"],
-             "scheduled_time": s["scheduled_time"], "num_bots": s["num_bots"]}
-            for s in _schedules.values()]
+    emit("schedule_update", raid_scheduler.list_pending())
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    # Start the persistent scheduler
+    raid_scheduler.start()
+
+    # Optional integrations (Discord / Telegram)
+    _integrations = load_integration_config()
+
+    if _integrations.get("discord_token"):
+        try:
+            from discord_bot import start_discord_bot
+            start_discord_bot(
+                _integrations["discord_token"],
+                manager,
+                raid_scheduler,
+                guild_id=_integrations.get("discord_guild_id"),
+                allowed_channels=_integrations.get("allowed_discord_channels"),
+            )
+            log.info("Discord bot started.")
+        except ImportError:
+            log.warning("discord.py not installed — Discord integration disabled.")
+        except Exception as exc:
+            log.warning("Discord bot failed to start: %s", exc)
+
+    if _integrations.get("telegram_token"):
+        try:
+            from telegram_bot import start_telegram_bot
+            start_telegram_bot(
+                _integrations["telegram_token"],
+                manager,
+                raid_scheduler,
+                allowed_users=_integrations.get("allowed_telegram_users"),
+            )
+            log.info("Telegram bot started.")
+        except ImportError:
+            log.warning("python-telegram-bot not installed — Telegram integration disabled.")
+        except Exception as exc:
+            log.warning("Telegram bot failed to start: %s", exc)
+
     log.info("Starting web dashboard on http://localhost:5000")
     socketio.run(app, host="0.0.0.0", port=5000, debug=False, load_dotenv=False)

@@ -14,13 +14,56 @@
 
 <header>
     <div class="header-left">
-        <h1>Zoom Bot Control Center</h1>
-        <span id="session-timer" class="timer hidden">00:00</span>
+        <h1><span class="logo-icon">&#9889;</span> Zoom Bot Control Center</h1>
+        <div id="connection-indicator" class="disconnected">Connecting…</div>
     </div>
-    <div id="connection-indicator" class="disconnected">Connecting…</div>
+    <span id="session-timer" class="timer hidden">00:00</span>
 </header>
 
-<!-- ── Progress bar ──────────────────────────────────────────────── -->
+<!-- ── Active Meeting Hero ───────────────────────────────────────── -->
+<div id="meeting-hero" class="meeting-hero hidden">
+    <div class="meeting-hero-glow"></div>
+    <div class="meeting-hero-content">
+        <div class="meeting-hero-left">
+            <div class="meeting-hero-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M15.05 5A5 5 0 0 1 19 8.95M15.05 1A9 9 0 0 1 23 8.94M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/>
+                </svg>
+            </div>
+            <div class="meeting-hero-info">
+                <span class="meeting-hero-label">Active Meeting</span>
+                <span class="meeting-hero-id" id="hero-meeting-id">—</span>
+            </div>
+        </div>
+        <div class="meeting-hero-right">
+            <div class="meeting-hero-badge" id="hero-status-badge">
+                <span class="badge-dot"></span>
+                <span id="hero-status-text">Idle</span>
+            </div>
+            <div class="meeting-hero-stats">
+                <div class="hero-stat">
+                    <span class="hero-stat-value" id="hero-bots">0</span>
+                    <span class="hero-stat-label">Bots</span>
+                </div>
+                <div class="hero-stat-divider"></div>
+                <div class="hero-stat">
+                    <span class="hero-stat-value hero-green" id="hero-joined">0</span>
+                    <span class="hero-stat-label">In</span>
+                </div>
+                <div class="hero-stat-divider"></div>
+                <div class="hero-stat">
+                    <span class="hero-stat-value hero-red" id="hero-failed">0</span>
+                    <span class="hero-stat-label">Out</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="meeting-hero-progress" id="hero-progress">
+        <div class="meeting-hero-progress-bar" id="hero-progress-bar"></div>
+    </div>
+</div>
+
+<!-- ── Progress bar (legacy, hidden when hero active) ────────────── -->
 <div id="progress-wrap" class="hidden" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
     <div id="progress-bar"></div>
     <span id="progress-text">0%</span>
@@ -43,7 +86,7 @@
                     </div>
                     <div class="form-group">
                         <label for="passcode">Passcode</label>
-                        <input type="text" id="passcode" placeholder="••••••" required>
+                        <input type="text" id="passcode" placeholder="(optional)">
                     </div>
                     <div class="form-group">
                         <label for="waiting-room-timeout">WR Timeout <span class="hint">(sec)</span></label>
@@ -90,6 +133,14 @@
                     <div class="form-group span-2">
                         <label for="chat-repeat-delay">Repeat Delay <span class="hint">(seconds between messages)</span></label>
                         <input type="number" id="chat-repeat-delay" min="0.5" step="0.5" value="2.0">
+                    </div>
+                    <div class="form-group span-2">
+                        <label for="chat-monitor-target">Monitor Target <span class="hint">(watch this user's messages)</span></label>
+                        <input type="text" id="chat-monitor-target" placeholder="Display name to watch">
+                    </div>
+                    <div class="form-group span-2">
+                        <label for="chat-monitor-reply">Auto-Reply <span class="hint">({user} {msg} placeholders)</span></label>
+                        <input type="text" id="chat-monitor-reply" placeholder="Reply template, e.g. @{user} nice point!">
                     </div>
                 </div>
             </fieldset>
@@ -153,6 +204,8 @@
         </form>
         <div id="controls">
             <button id="btn-start" class="btn btn-start">Start</button>
+            <button id="btn-stage" class="btn btn-stage">Stage</button>
+            <button id="btn-deploy" class="btn btn-deploy" disabled>Deploy All</button>
             <button id="btn-stop" class="btn btn-stop" disabled>Stop</button>
         </div>
     </section>

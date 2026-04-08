@@ -3,6 +3,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ── DOM refs ─────────────────────────────────────────────────────
     const btnStart       = document.getElementById("btn-start");
+    const btnStage       = document.getElementById("btn-stage");
+    const btnDeploy      = document.getElementById("btn-deploy");
     const btnStop        = document.getElementById("btn-stop");
     const botGrid        = document.getElementById("bot-grid");
     const botPlaceholder = document.getElementById("bot-placeholder");
@@ -32,10 +34,22 @@ document.addEventListener("DOMContentLoaded", () => {
         persistMode:  document.getElementById("persist-mode"),
         chatRepeatCount: document.getElementById("chat-repeat-count"),
         chatRepeatDelay: document.getElementById("chat-repeat-delay"),
+        chatMonitorTarget: document.getElementById("chat-monitor-target"),
+        chatMonitorReply: document.getElementById("chat-monitor-reply"),
     };
 
     const screenshotGrid = document.getElementById("screenshot-grid");
     const screenshotPlaceholder = document.getElementById("screenshot-placeholder");
+
+    // Hero banner refs
+    const meetingHero     = document.getElementById("meeting-hero");
+    const heroMeetingId   = document.getElementById("hero-meeting-id");
+    const heroStatusBadge = document.getElementById("hero-status-badge");
+    const heroStatusText  = document.getElementById("hero-status-text");
+    const heroBots        = document.getElementById("hero-bots");
+    const heroJoined      = document.getElementById("hero-joined");
+    const heroFailed      = document.getElementById("hero-failed");
+    const heroProgressBar = document.getElementById("hero-progress-bar");
 
     const statEls = {
         joined:  document.getElementById("stat-joined"),
@@ -135,21 +149,17 @@ document.addEventListener("DOMContentLoaded", () => {
         progressText.textContent = done + " / " + total + "  (" + pct + "%)";
     }
 
-    // ── Start button ─────────────────────────────────────────────────
-    btnStart.addEventListener("click", () => {
-        const numBots = parseInt(inputs.numBots.value) || 1;
-
-        // Collect selected reactions
+    // ── Build payload from form ─────────────────────────────────────
+    function buildPayload() {
         const selectedReactions = [];
         document.querySelectorAll("#reaction-checkboxes input:checked").forEach(cb => {
             selectedReactions.push(cb.value);
         });
-
-        const payload = {
+        return {
             meeting_id:   inputs.meetingId.value,
             passcode:     inputs.passcode.value,
             thread_count: parseInt(inputs.threadCount.value) || 1,
-            num_bots:     numBots,
+            num_bots:     parseInt(inputs.numBots.value) || 1,
             custom_name:  inputs.customName.value,
             use_proxies:  inputs.useProxies.checked,
             chat_recipient: inputs.chatRecipient.value,
@@ -161,36 +171,40 @@ document.addEventListener("DOMContentLoaded", () => {
             persist_mode: inputs.persistMode.checked,
             chat_repeat_count: parseInt(inputs.chatRepeatCount.value) || 0,
             chat_repeat_delay: parseFloat(inputs.chatRepeatDelay.value) || 2.0,
+            chat_monitor_target: inputs.chatMonitorTarget.value,
+            chat_monitor_reply: inputs.chatMonitorReply.value,
         };
+    }
 
-        if (!payload.meeting_id || !payload.passcode) {
-            showToast("Meeting ID and Passcode are required.", "error");
-            return;
-        }
-
-        // Sync auto-restart setting before launching
-        socket.emit("set_auto_restart", {
-            enabled: inputs.autoRestart.checked,
-            delay: parseInt(inputs.restartDelay.value) || 5,
-        });
-
-        socket.emit("start", payload);
-        btnStart.disabled = true;
-        btnStop.disabled  = false;
+    function setupLaunchUI(payload) {
+        const numBots = payload.num_bots;
+        btnStart.disabled  = true;
+        btnStage.disabled  = true;
+        btnStop.disabled   = false;
         setFormLocked(true);
+
+        // Show hero banner
+        meetingHero.classList.remove("hidden");
+        meetingHero.classList.add("active");
+        meetingHero.classList.remove("idle");
+        heroMeetingId.textContent = payload.meeting_id.replace(/(\d{3})(\d{3,4})(\d{3,4})/, "$1 $2 $3");
+        heroStatusBadge.classList.add("live");
+        heroStatusText.textContent = "Live";
+        heroBots.textContent = numBots;
+        heroJoined.textContent = "0";
+        heroFailed.textContent = "0";
+        heroProgressBar.style.width = "0%";
 
         // Show progress bar
         progressWrap.classList.remove("hidden");
         progressBar.style.width = "0%";
         progressText.textContent = "0%";
 
-        // Start timer
         startTimer();
 
         // Build bot cards
         botGrid.innerHTML = "";
         botPlaceholder.style.display = "none";
-
         for (let i = 0; i < numBots; i++) {
             const card = document.createElement("div");
             card.className = "bot-card pending";
@@ -198,12 +212,49 @@ document.addEventListener("DOMContentLoaded", () => {
             card.textContent = "Bot " + (i + 1);
             botGrid.appendChild(card);
         }
+    }
+
+    // ── Start button ─────────────────────────────────────────────────
+    btnStart.addEventListener("click", () => {
+        const payload = buildPayload();
+        if (!payload.meeting_id) {
+            showToast("Meeting ID is required.", "error");
+            return;
+        }
+        socket.emit("set_auto_restart", {
+            enabled: inputs.autoRestart.checked,
+            delay: parseInt(inputs.restartDelay.value) || 5,
+        });
+        socket.emit("start", payload);
+        setupLaunchUI(payload);
+    });
+
+    // ── Stage button ─────────────────────────────────────────────────
+    btnStage.addEventListener("click", () => {
+        const payload = buildPayload();
+        if (!payload.meeting_id) {
+            showToast("Meeting ID is required.", "error");
+            return;
+        }
+        socket.emit("stage", payload);
+        setupLaunchUI(payload);
+        heroStatusText.textContent = "Staging";
+        btnDeploy.disabled = false;
+    });
+
+    // ── Deploy button ────────────────────────────────────────────────
+    btnDeploy.addEventListener("click", () => {
+        socket.emit("deploy");
+        btnDeploy.disabled = true;
+        heroStatusText.textContent = "Live";
+        showToast("Deploy signal sent — all bots joining!", "success");
     });
 
     // ── Stop button ──────────────────────────────────────────────────
     btnStop.addEventListener("click", () => {
         socket.emit("stop");
-        btnStop.disabled = true;
+        btnStop.disabled   = true;
+        btnDeploy.disabled = true;
         showToast("Stop signal sent.", "info");
     });
 
@@ -212,8 +263,10 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!data.ok) {
             showToast(data.message, "error");
             appendLog("[ERROR] " + data.message, "ERROR");
-            btnStart.disabled = false;
-            btnStop.disabled  = true;
+            btnStart.disabled  = false;
+            btnStage.disabled  = false;
+            btnDeploy.disabled = true;
+            btnStop.disabled   = true;
             setFormLocked(false);
             stopTimer();
         }
@@ -230,6 +283,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Update progress bar
         updateProgress(s.succeeded, s.failed, s.total);
+
+        // Sync hero banner
+        heroJoined.textContent = s.succeeded;
+        heroFailed.textContent = s.failed;
+        if (s.total > 0) {
+            const pct = Math.round(((s.succeeded + s.failed) / s.total) * 100);
+            heroProgressBar.style.width = pct + "%";
+        }
 
         // Detect new restart cycle: stats reset while still running
         if (s.running && s.cycle > cycleCount) {
@@ -249,11 +310,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
         // Session ended
         if (!s.running && btnStart.disabled) {
-            btnStart.disabled = false;
-            btnStop.disabled  = true;
+            btnStart.disabled  = false;
+            btnStage.disabled  = false;
+            btnDeploy.disabled = true;
+            btnStop.disabled   = true;
             setFormLocked(false);
             stopTimer();
             cycleCount = 0;
+
+            // Transition hero to idle
+            meetingHero.classList.remove("active");
+            meetingHero.classList.add("idle");
+            heroStatusBadge.classList.remove("live");
+            heroStatusText.textContent = "Done";
 
             if (s.total > 0 && (s.succeeded + s.failed) >= s.total) {
                 if (s.failed === 0) {

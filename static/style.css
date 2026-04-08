@@ -48,29 +48,33 @@ header {
 .header-left {
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 0.75rem;
 }
 header h1 {
     font-size: 1.35rem;
     font-weight: 700;
     letter-spacing: -0.01em;
 }
+.logo-icon {
+    font-size: 1.1rem;
+}
 
 /* Session timer */
 .timer {
     font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-    font-size: 0.85rem;
-    font-weight: 600;
+    font-size: 0.9rem;
+    font-weight: 700;
     color: var(--accent-blue);
     background: var(--accent-blue-dim);
-    padding: 0.25rem 0.65rem;
+    padding: 0.35rem 0.85rem;
     border-radius: 999px;
+    border: 1px solid rgba(59, 130, 246, 0.25);
 }
 
 #connection-indicator {
-    font-size: 0.75rem;
+    font-size: 0.68rem;
     font-weight: 600;
-    padding: 0.3rem 0.75rem;
+    padding: 0.25rem 0.6rem;
     border-radius: 999px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -82,6 +86,181 @@ header h1 {
 #connection-indicator.disconnected {
     background: var(--accent-red-dim);
     color: var(--accent-red);
+}
+
+/* ── Meeting Hero Banner ──────────────────────────────────────────── */
+.meeting-hero {
+    position: relative;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 1.25rem;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+}
+.meeting-hero-glow {
+    position: absolute;
+    top: -60%;
+    left: -10%;
+    width: 50%;
+    height: 220%;
+    background: radial-gradient(ellipse, rgba(34, 197, 94, 0.08) 0%, transparent 70%);
+    pointer-events: none;
+    transition: background 0.6s;
+}
+.meeting-hero.active .meeting-hero-glow {
+    background: radial-gradient(ellipse, rgba(34, 197, 94, 0.15) 0%, transparent 70%);
+}
+.meeting-hero.idle .meeting-hero-glow {
+    background: radial-gradient(ellipse, rgba(107, 113, 144, 0.06) 0%, transparent 70%);
+}
+
+.meeting-hero-content {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.1rem 1.5rem;
+    gap: 1.5rem;
+}
+
+.meeting-hero-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+.meeting-hero-icon {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(59, 130, 246, 0.12));
+    border: 1px solid rgba(34, 197, 94, 0.2);
+    border-radius: 12px;
+    color: var(--accent-green);
+    transition: all 0.3s;
+}
+.meeting-hero.active .meeting-hero-icon {
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(59, 130, 246, 0.15));
+    border-color: rgba(34, 197, 94, 0.35);
+    box-shadow: 0 0 20px rgba(34, 197, 94, 0.15);
+}
+
+.meeting-hero-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+.meeting-hero-label {
+    font-size: 0.7rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+.meeting-hero-id {
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: 0.03em;
+}
+
+.meeting-hero-right {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+/* Status badge */
+.meeting-hero-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.85rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: rgba(107, 113, 144, 0.1);
+    color: var(--text-muted);
+    border: 1px solid rgba(107, 113, 144, 0.15);
+    transition: all 0.3s;
+}
+.meeting-hero-badge .badge-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: background 0.3s, box-shadow 0.3s;
+}
+.meeting-hero-badge.live {
+    background: var(--accent-green-dim);
+    color: var(--accent-green);
+    border-color: rgba(34, 197, 94, 0.3);
+}
+.meeting-hero-badge.live .badge-dot {
+    background: var(--accent-green);
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+    animation: badge-pulse 2s ease-in-out infinite;
+}
+@keyframes badge-pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(34, 197, 94, 0.6); }
+    50% { opacity: 0.6; box-shadow: 0 0 4px rgba(34, 197, 94, 0.3); }
+}
+
+/* Inline hero stats */
+.meeting-hero-stats {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    padding: 0.5rem 1rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+.hero-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.05rem;
+    min-width: 32px;
+}
+.hero-stat-value {
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+.hero-stat-value.hero-green { color: var(--accent-green); }
+.hero-stat-value.hero-red { color: var(--accent-red); }
+.hero-stat-label {
+    font-size: 0.6rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+.hero-stat-divider {
+    width: 1px;
+    height: 24px;
+    background: var(--border);
+}
+
+/* Thin progress strip at bottom of hero */
+.meeting-hero-progress {
+    height: 3px;
+    background: var(--bg-card);
+    overflow: hidden;
+}
+.meeting-hero-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent-green), #34d399, var(--accent-blue));
+    border-radius: 0 3px 3px 0;
+    transition: width 0.5s ease;
 }
 
 /* ── Progress Bar ──────────────────────────────────────────────────── */
@@ -296,6 +475,10 @@ input:disabled {
 
 .btn-start { background: var(--accent-green); color: #000; }
 .btn-start:hover:not(:disabled) { opacity: 0.9; }
+.btn-stage { background: #f59e0b; color: #000; }
+.btn-stage:hover:not(:disabled) { opacity: 0.9; }
+.btn-deploy { background: #8b5cf6; color: #fff; }
+.btn-deploy:hover:not(:disabled) { opacity: 0.9; }
 .btn-stop { background: var(--accent-red); color: #fff; }
 .btn-stop:hover:not(:disabled) { opacity: 0.9; }
 
@@ -375,6 +558,7 @@ input:disabled {
 }
 .bot-card.pending  { border-color: var(--text-muted); color: var(--text-muted); }
 .bot-card.joining  { border-color: var(--accent-yellow); color: var(--accent-yellow); background: var(--accent-yellow-dim); }
+.bot-card.staged   { border-color: #f59e0b; color: #f59e0b; background: rgba(245, 158, 11, 0.12); animation: pulse-waiting 2s ease-in-out infinite; }
 .bot-card.joined   { border-color: var(--accent-green); color: var(--accent-green); background: var(--accent-green-dim); }
 .bot-card.failed   { border-color: var(--accent-red); color: var(--accent-red); background: var(--accent-red-dim); }
 .bot-card.leaving  { border-color: var(--accent-yellow); color: var(--accent-yellow); background: var(--accent-yellow-dim); }
@@ -507,6 +691,8 @@ input:disabled {
     .form-grid.cols-4 { grid-template-columns: repeat(2, 1fr); }
     .form-group.span-2 { grid-column: span 1; }
     .two-col { grid-template-columns: 1fr; }
+    .meeting-hero-content { flex-direction: column; align-items: flex-start; gap: 1rem; }
+    .meeting-hero-right { width: 100%; justify-content: space-between; }
 }
 @media (max-width: 500px) {
     .stat-grid { grid-template-columns: repeat(2, 1fr); }
@@ -515,4 +701,6 @@ input:disabled {
     .form-grid.cols-2 { grid-template-columns: 1fr; }
     .form-group.span-2 { grid-column: span 1; }
     body { padding: 0.75rem; }
+    .meeting-hero-id { font-size: 1.1rem; }
+    .meeting-hero-right { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
 }

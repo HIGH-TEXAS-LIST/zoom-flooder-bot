@@ -98,6 +98,28 @@ def _pick_unique_name():
     return f"User_{random.randint(1000, 9999)}"
 
 
+def _safe_type(driver, element, text):
+    """Type text into an element using JS to avoid ChromeDriver BMP limitation.
+
+    ChromeDriver's send_keys only supports Basic Multilingual Plane characters,
+    so emojis and other non-BMP characters cause errors.  This uses JavaScript
+    to set the value and dispatch React-compatible input events instead.
+    """
+    driver.execute_script(
+        """
+        var el = arguments[0], val = arguments[1];
+        el.focus();
+        // Use native setter to bypass React's controlled-input override
+        var nativeSet = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value').set;
+        nativeSet.call(el, val);
+        el.dispatchEvent(new Event('input', {bubbles: true}));
+        el.dispatchEvent(new Event('change', {bubbles: true}));
+        """,
+        element, text,
+    )
+
+
 # ── Error detection XPaths / selectors ──────────────────────────────────────
 _ERROR_SELECTORS = [
     (By.XPATH, "//*[contains(text(), 'meeting password is wrong')]"),
@@ -127,17 +149,22 @@ _CAPTCHA_SELECTORS = [
     (By.CSS_SELECTOR, "iframe[src*='recaptcha']"),
     (By.CSS_SELECTOR, "iframe[src*='captcha']"),
     (By.CSS_SELECTOR, "iframe[src*='hcaptcha']"),
-    (By.CSS_SELECTOR, "iframe[src*='challenge']"),
     (By.CSS_SELECTOR, "iframe[src*='turnstile']"),
-    (By.CSS_SELECTOR, "div[class*='captcha']"),
-    (By.CSS_SELECTOR, "div[class*='challenge']"),
     (By.CSS_SELECTOR, "#recaptcha"),
     (By.CSS_SELECTOR, ".g-recaptcha"),
     (By.CSS_SELECTOR, ".h-captcha"),
     (By.XPATH, "//*[contains(text(), 'verify you are human')]"),
     (By.XPATH, "//*[contains(text(), \"I'm not a robot\")]"),
-    (By.XPATH, "//*[contains(text(), 'complete a challenge')]"),
-    (By.XPATH, "//*[contains(text(), 'security check')]"),
+]
+
+# Indicators that we're already inside the meeting (skip captcha check)
+_IN_MEETING_INDICATORS = [
+    (By.CSS_SELECTOR, "[class*='meeting']"),
+    (By.CSS_SELECTOR, "[class*='footer-button']"),
+    (By.CSS_SELECTOR, "[aria-label*='Chat']"),
+    (By.CSS_SELECTOR, "[aria-label*='Leave']"),
+    (By.CSS_SELECTOR, "[aria-label*='Mute']"),
+    (By.CSS_SELECTOR, "[aria-label*='Reactions']"),
 ]
 
 
@@ -151,18 +178,27 @@ def _check_join_errors(driver):
 
 
 def _check_captcha(driver):
-    """Return True if the page shows a captcha/challenge, else False."""
+    """Return True if the page shows a captcha/challenge, else False.
+
+    Skips detection if we appear to already be inside the meeting to avoid
+    false positives from Zoom's in-meeting DOM elements.
+    """
+    # If we're already in the meeting, there's no captcha
+    for by, selector in _IN_MEETING_INDICATORS:
+        if driver.find_elements(by, selector):
+            return False
+
     for by, selector in _CAPTCHA_SELECTORS:
         elems = driver.find_elements(by, selector)
         if elems:
             return True
-    # JS fallback: check for hidden recaptcha iframes
+    # JS fallback: check for hidden recaptcha/hcaptcha/turnstile iframes
     try:
         found = driver.execute_script("""
             var iframes = document.querySelectorAll('iframe');
             for (var i = 0; i < iframes.length; i++) {
                 var src = (iframes[i].src || '').toLowerCase();
-                if (src.indexOf('captcha') !== -1 || src.indexOf('challenge') !== -1 ||
+                if (src.indexOf('captcha') !== -1 ||
                     src.indexOf('recaptcha') !== -1 || src.indexOf('hcaptcha') !== -1 ||
                     src.indexOf('turnstile') !== -1) return true;
             }
@@ -521,23 +557,21 @@ def _verify_input_fields(driver, bot_name, passcode):
     """Re-check that name and passcode fields have values, refill if empty."""
     try:
         name_el = _find_element_multi(driver, _NAME_SELECTORS)
-        pwd_el = _find_element_multi(driver, _PWD_SELECTORS)
-        if not name_el or not pwd_el:
+        if not name_el:
             return False
 
         if not name_el.get_attribute("value"):
-            name_el.clear()
-            name_el.send_keys(bot_name)
+            _safe_type(driver, name_el, bot_name)
             time.sleep(INPUT_SETTLE_DELAY)
 
-        if not pwd_el.get_attribute("value"):
-            pwd_el.clear()
-            pwd_el.send_keys(passcode)
+        pwd_el = _find_element_multi(driver, _PWD_SELECTORS)
+        if passcode and pwd_el and not pwd_el.get_attribute("value"):
+            _safe_type(driver, pwd_el, passcode)
             time.sleep(INPUT_SETTLE_DELAY)
 
-        return bool(
-            name_el.get_attribute("value") and pwd_el.get_attribute("value")
-        )
+        name_ok = bool(name_el.get_attribute("value"))
+        pwd_ok = bool(pwd_el.get_attribute("value")) if passcode else True
+        return name_ok and pwd_ok
     except Exception as exc:
         log.debug("Field verification error: %s", exc)
         return False
@@ -651,7 +685,8 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="",
                stop_event=None, proxies=None, chat_recipient="", chat_message="",
                status_callback=None, waiting_room_timeout=60,
                reactions=None, reaction_count=0, reaction_delay=1.0,
-               persist_mode=False, chat_repeat_count=0, chat_repeat_delay=2.0):
+               persist_mode=False, chat_repeat_count=0, chat_repeat_delay=2.0,
+               stage_event=None):
     """Launch a single bot that joins the given Zoom meeting.
 
     Returns (driver, elapsed_seconds) on success or (None, elapsed_seconds) on failure.
@@ -745,41 +780,36 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="",
                 time.sleep(2)
                 continue
 
-            # Clear and fill with JS fallback for React controlled inputs
-            try:
-                driver.execute_script(
-                    "var el = arguments[0]; el.focus(); el.value = ''; "
-                    "var nev = new Event('input', {bubbles:true}); el.dispatchEvent(nev);",
-                    name_el,
-                )
-            except Exception:
-                pass
-            name_el.clear()
-            name_el.send_keys(bot_name)
-            # Trigger React onChange via native input event
-            try:
-                driver.execute_script(
-                    "var ev = new Event('input', {bubbles:true}); arguments[0].dispatchEvent(ev);",
-                    name_el,
-                )
-            except Exception:
-                pass
+            # Fill name using JS to support emojis / non-BMP characters
+            _safe_type(driver, name_el, bot_name)
             time.sleep(INPUT_SETTLE_DELAY)
             log.info("Bot %d: Filled name '%s'.", bot_id + 1, bot_name)
 
             # Check if passcode field is on the same page (old-style single-step)
             pwd_el = _find_element_multi(driver, _PWD_SELECTORS) or _find_element_js(driver, 'password')
-            if pwd_el:
-                pwd_el.clear()
-                pwd_el.send_keys(passcode)
+            if pwd_el and passcode:
+                _safe_type(driver, pwd_el, passcode)
                 time.sleep(INPUT_SETTLE_DELAY)
                 log.info("Bot %d: Filled passcode (single-step).", bot_id + 1)
+
+            # ── Staged join: wait for deploy signal before clicking Join ──
+            if stage_event is not None:
+                log.info("Bot %d: Staged — waiting for deploy signal…", bot_id + 1)
+                if status_callback:
+                    status_callback(bot_id, "staged")
+                # Block until deploy() is called (or stop signal)
+                while not stage_event.is_set():
+                    if _stopped():
+                        driver.quit(); driver = None
+                        return (None, time.monotonic() - t_start)
+                    stage_event.wait(timeout=0.5)
+                log.info("Bot %d: Deploy signal received — joining!", bot_id + 1)
 
             # Click Join
             _click_join(driver, bot_id, bot_name, passcode)
 
             # ── Step 2: Handle passcode on second page (if needed) ──
-            if not pwd_el:
+            if not pwd_el and passcode:
                 time.sleep(2)
                 # Re-check frames after page transition
                 driver.switch_to.default_content()
@@ -792,9 +822,8 @@ def launch_bot(bot_id, meeting_id, passcode, names_list, custom_name="",
                         break
                     time.sleep(1.5)
 
-                if pwd_el:
-                    pwd_el.clear()
-                    pwd_el.send_keys(passcode)
+                if pwd_el and passcode:
+                    _safe_type(driver, pwd_el, passcode)
                     time.sleep(INPUT_SETTLE_DELAY)
                     log.info("Bot %d: Filled passcode (step 2).", bot_id + 1)
                     # Click Join again for passcode submission
@@ -1404,10 +1433,10 @@ def send_chat_message(driver, bot_id, message, recipient=""):
             _take_screenshot(driver, bot_id, "chat_input_not_found")
             return False
 
-        # Step 3: Type the message
+        # Step 3: Type the message (use JS for emoji/non-BMP support)
         chat_input.click()
         time.sleep(0.3)
-        chat_input.send_keys(message)
+        _safe_type(driver, chat_input, message)
         time.sleep(0.3)
 
         # Step 4: Send — try Enter key first, then send button
@@ -1420,6 +1449,104 @@ def send_chat_message(driver, bot_id, message, recipient=""):
     except Exception as exc:
         log.warning("Bot %d: Failed to send chat message: %s", bot_id + 1, exc)
         return False
+
+
+# ── Chat monitoring ───────────────────────────────────────────────────────
+
+def read_chat_messages(driver, bot_id):
+    """Read visible messages from the Zoom chat panel.
+
+    Returns a list of dicts: [{"sender": str, "text": str}, ...].
+    Assumes the chat panel is already open.
+    """
+    try:
+        messages = driver.execute_script("""
+            // Zoom web client renders chat messages in containers.
+            // Each message has a sender name and message text.
+            var results = [];
+            // Strategy 1: Look for chat message containers
+            var containers = document.querySelectorAll(
+                '[class*="chat-message"], [data-testid*="chat-message"], '
+                + '[class*="ChatMessage"], [class*="chat-item"]'
+            );
+            if (containers.length === 0) {
+                // Strategy 2: Look for message list items
+                containers = document.querySelectorAll(
+                    '[role="listitem"], [class*="message-item"], '
+                    + '[class*="msg-item"], [class*="chat-content"] > div'
+                );
+            }
+            containers.forEach(function(c) {
+                // Find sender name - usually in a span/div with specific class
+                var senderEl = c.querySelector(
+                    '[class*="sender"], [class*="Sender"], [class*="author"], '
+                    + '[class*="user-name"], [class*="display-name"], '
+                    + '[data-testid*="sender"], [class*="ChatSender"]'
+                );
+                // Find message text
+                var textEl = c.querySelector(
+                    '[class*="content"], [class*="Content"], [class*="text-message"], '
+                    + '[class*="message-body"], [class*="msg-text"], '
+                    + '[data-testid*="message-content"], [class*="ChatText"]'
+                );
+                if (!textEl) {
+                    // Fallback: get all text nodes excluding the sender
+                    textEl = c;
+                }
+                var sender = senderEl ? senderEl.textContent.trim() : "";
+                var text = textEl ? textEl.textContent.trim() : "";
+                // Remove sender name from text if it starts with it
+                if (sender && text.startsWith(sender)) {
+                    text = text.substring(sender.length).trim();
+                }
+                if (text) {
+                    results.push({sender: sender, text: text});
+                }
+            });
+            return results;
+        """)
+        return messages or []
+    except Exception as exc:
+        log.debug("Bot %d: Failed to read chat messages: %s", bot_id + 1, exc)
+        return []
+
+
+def monitor_and_reply(driver, bot_id, target_user, reply_template, last_seen_count=0):
+    """Check for new messages from target_user and auto-reply.
+
+    Args:
+        driver: Selenium WebDriver instance.
+        bot_id: Bot index (0-based).
+        target_user: Display name to watch for (case-insensitive partial match).
+        reply_template: Reply text. Supports {user} and {msg} placeholders.
+        last_seen_count: Number of messages already processed (to skip old ones).
+
+    Returns:
+        Updated last_seen_count.
+    """
+    messages = read_chat_messages(driver, bot_id)
+    if not messages:
+        return last_seen_count
+
+    # Only process new messages
+    new_messages = messages[last_seen_count:]
+    target_lower = target_user.lower()
+
+    for msg in new_messages:
+        sender = msg.get("sender", "")
+        text = msg.get("text", "")
+        if not sender or not target_lower:
+            continue
+
+        if target_lower in sender.lower():
+            reply = reply_template.replace("{user}", sender).replace("{msg}", text)
+            log.info("Bot %d: Target '%s' said: '%s' — replying.", bot_id + 1, sender, text[:50])
+            try:
+                send_chat_message(driver, bot_id, reply)
+            except Exception as exc:
+                log.warning("Bot %d: Auto-reply failed: %s", bot_id + 1, exc)
+
+    return len(messages)
 
 
 # ── Leave-meeting selectors ────────────────────────────────────────────────

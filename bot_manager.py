@@ -15,7 +15,8 @@ import threading
 import time
 
 from bot import (launch_bot, init_name_pool, leave_meeting,
-                 check_bot_alive, send_chat_message, spam_reactions)
+                 check_bot_alive, send_chat_message, spam_reactions,
+                 monitor_and_reply)
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ log = logging.getLogger(__name__)
 class BotStatus(enum.Enum):
     PENDING = "pending"
     JOINING = "joining"
+    STAGED = "staged"
     JOINED = "joined"
     LEAVING = "leaving"
     LEFT = "left"
@@ -44,6 +46,7 @@ class BotManager:
         self._run_thread = None
         self._auto_restart = False
         self._restart_delay = 5        # seconds between restart cycles
+        self._stage_event = None       # set when staging bots (deploy releases them)
 
         # Live stats — guarded by _stats_lock
         self._stats_lock = threading.Lock()
@@ -119,6 +122,24 @@ class BotManager:
         self._run_thread = threading.Thread(target=self._run, args=(cfg,), daemon=True)
         self._run_thread.start()
 
+    # ── Stage / Deploy ────────────────────────────────────────────────────────
+    def stage(self, cfg):
+        """Launch bots but hold them at the form before clicking Join.
+
+        Bots fill name/passcode, then block until deploy() is called.
+        """
+        self._stage_event = threading.Event()
+        cfg = dict(cfg, _stage_event=self._stage_event)
+        self.start(cfg)
+
+    def deploy(self):
+        """Release all staged bots so they click Join simultaneously."""
+        if self._stage_event is not None:
+            log.info("Deploy signal sent — all staged bots will join now.")
+            self._stage_event.set()
+        else:
+            log.warning("No staged bots to deploy.")
+
     # ── Background launch loop ───────────────────────────────────────────────
     def _run(self, cfg):
         try:
@@ -171,8 +192,15 @@ class BotManager:
         chat_msg = cfg.get("chat_message", "")
         reactions = cfg.get("reactions", [])
         reaction_count = cfg.get("reaction_count", 0)
+        monitor_target = cfg.get("chat_monitor_target", "")
+        monitor_reply = cfg.get("chat_monitor_reply", "")
+
+        # Track last-seen message count per bot for chat monitoring
+        chat_last_seen = {}
 
         log.info("── Persistence mode active (interval: %ds) ──", interval)
+        if monitor_target:
+            log.info("── Chat monitor: watching '%s' ──", monitor_target)
         last_chat = time.monotonic()
         last_reaction = time.monotonic()
 
@@ -209,6 +237,16 @@ class BotManager:
                         (now - last_reaction) >= reaction_interval):
                     try:
                         spam_reactions(driver, bot_id, reactions, 1, 0.5)
+                    except Exception:
+                        pass
+
+                # Chat monitoring: check for new messages from target user
+                if monitor_target and monitor_reply:
+                    try:
+                        prev = chat_last_seen.get(bot_id_1, 0)
+                        chat_last_seen[bot_id_1] = monitor_and_reply(
+                            driver, bot_id, monitor_target, monitor_reply, prev
+                        )
                     except Exception:
                         pass
 
@@ -302,6 +340,7 @@ class BotManager:
                         persist_mode=cfg.get("persist_mode", False),
                         chat_repeat_count=cfg.get("chat_repeat_count", 0),
                         chat_repeat_delay=cfg.get("chat_repeat_delay", 2.0),
+                        stage_event=cfg.get("_stage_event"),
                     )] = i
 
                 for future in concurrent.futures.as_completed(futures):
@@ -378,6 +417,7 @@ class BotManager:
     def _bot_status_callback(self, bot_id, status_str):
         """Called from launch_bot threads for mid-flight status updates."""
         status_map = {
+            "staged": BotStatus.STAGED,
             "waiting_room": BotStatus.WAITING_ROOM,
             "disconnected": BotStatus.DISCONNECTED,
             "reconnecting": BotStatus.RECONNECTING,

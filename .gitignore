@@ -21,6 +21,7 @@ screenshots/
 debug_bot*.png
 proxies.txt
 default.txt
+raids.db
 
 # IDE / editor
 .vscode/

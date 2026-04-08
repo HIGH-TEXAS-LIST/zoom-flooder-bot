@@ -144,7 +144,8 @@ def build_config(meeting_id, passcode, thread_count, num_bots, custom_name="",
                   waiting_room_timeout=60, reactions=None, reaction_count=0,
                   reaction_delay=1.0, persist_mode=False, persist_interval=30,
                   persist_chat_interval=0, persist_reaction_interval=0,
-                  chat_repeat_count=0, chat_repeat_delay=2.0):
+                  chat_repeat_count=0, chat_repeat_delay=2.0,
+                  chat_monitor_target="", chat_monitor_reply=""):
     """Build a config dict from explicit values — no input() calls."""
     names = load_names()
 
@@ -186,6 +187,8 @@ def build_config(meeting_id, passcode, thread_count, num_bots, custom_name="",
         "persist_reaction_interval": max(0, int(persist_reaction_interval)),
         "chat_repeat_count": max(0, int(chat_repeat_count)),
         "chat_repeat_delay": max(0.5, float(chat_repeat_delay)),
+        "chat_monitor_target": str(chat_monitor_target).strip() if chat_monitor_target else "",
+        "chat_monitor_reply": str(chat_monitor_reply).strip() if chat_monitor_reply else "",
     }
 
 
@@ -225,6 +228,51 @@ def _test_one_proxy(proxy, timeout=5):
         return (proxy, True, latency)
     except Exception:
         return (proxy, False, 0)
+
+
+# ── Integration config (Discord / Telegram) ──────────────────────────────
+
+def load_integration_config():
+    """Load optional bot tokens from .env file or environment variables.
+
+    Returns a dict with keys:
+        discord_token, telegram_token, discord_guild_id,
+        allowed_discord_channels (list[int] or None),
+        allowed_telegram_users (list[int] or None).
+    Missing values are None.
+    """
+    # Try loading .env file (optional dependency)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass  # python-dotenv not installed; rely on real env vars
+
+    def _csv_ints(key):
+        raw = os.environ.get(key, "").strip()
+        if not raw:
+            return None
+        try:
+            return [int(x.strip()) for x in raw.split(",") if x.strip()]
+        except ValueError:
+            log.warning("Invalid %s value: %r (expected comma-separated integers).", key, raw)
+            return None
+
+    guild_id = os.environ.get("DISCORD_GUILD_ID", "").strip() or None
+    if guild_id:
+        try:
+            guild_id = int(guild_id)
+        except ValueError:
+            log.warning("Invalid DISCORD_GUILD_ID: %r", guild_id)
+            guild_id = None
+
+    return {
+        "discord_token": os.environ.get("DISCORD_BOT_TOKEN", "").strip() or None,
+        "telegram_token": os.environ.get("TELEGRAM_BOT_TOKEN", "").strip() or None,
+        "discord_guild_id": guild_id,
+        "allowed_discord_channels": _csv_ints("ALLOWED_DISCORD_CHANNELS"),
+        "allowed_telegram_users": _csv_ints("ALLOWED_TELEGRAM_USERS"),
+    }
 
 
 def check_proxy_health(proxies, timeout=5, max_workers=10):
